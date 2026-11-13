@@ -178,12 +178,14 @@ final class Shoot: ObservableObject {
     }
     var recSince: Date { recStart }
     @Published var cameraInfo = ""
+    @Published var cameraMissing = false
     var currentTakePath = ""
 
     /// Opens the built-in camera (the Sony first) and waits, bounded, until frames arrive. Returns an error text or nil.
     func prepareCamera() async -> String? {
         cameraInfo = "Opening the camera..."
-        if let e = await CameraEngine.shared.start() { cameraInfo = e; status = e; return e }
+        if let e = await CameraEngine.shared.start() { cameraInfo = e; status = e; cameraMissing = CameraEngine.shared.missing; return e }
+        cameraMissing = false
         if let e = await CameraEngine.shared.waitForFrames() { cameraInfo = e; status = e; return e }
         cameraInfo = "\(CameraEngine.shared.cameraName) · sound: \(CameraEngine.shared.micName)"
         return nil

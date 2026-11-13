@@ -46,6 +46,13 @@ final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private(set) var micName = ""
     private(set) var recStart: Date?
     private(set) var lastError = ""
+    private(set) var missing = false
+    var captureSize: String { let z = slicer.sourceSize; return z.width > 0 ? "\(Int(z.width))x\(Int(z.height))" : "" }
+    /// is the wanted camera attached right now (checked at once, without opening it)
+    func wantedPresent() -> Bool {
+        let w = wantedCamera.lowercased()
+        return w.isEmpty ? !Cameras.all().isEmpty : Cameras.all().contains { $0.localizedName.lowercased().contains(w) }
+    }
 
     var frames: Int { lock.lock(); defer { lock.unlock() }; return _frames }
     var running: Bool { session.isRunning }
@@ -93,7 +100,7 @@ final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
          "microphones": Cameras.microphones().map { ["name": $0.localizedName, "id": $0.uniqueID] },
          "camera": cameraName, "microphone": micName, "wantedCamera": wantedCamera, "wantedMic": wantedMic,
          "cameraAllowed": Self.cameraStatus() == .authorized, "micAllowed": Self.micStatus() == .authorized,
-         "running": running, "frames": frames, "fps": Int(fps), "size": "\(Slicer.outW)x\(Slicer.outH)", "recording": isRecording, "error": lastError]
+         "state": missing ? "missing" : (running ? "ok" : "closed"), "captureSize": captureSize, "running": running, "frames": frames, "fps": Int(fps), "size": "\(Slicer.outW)x\(Slicer.outH)", "recording": isRecording, "error": lastError]
     }
 
     // MARK: session
@@ -102,9 +109,13 @@ final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         guard await askPermissions() else { lastError = "The camera is not allowed (System Settings, Privacy, Camera)."; return lastError }
         let w = wantedCamera.lowercased()
         let cams = Cameras.all()
-        guard let cam = cams.first(where: { $0.localizedName.lowercased().contains(w) }) ?? cams.first(where: { Cameras.isSony($0) }) ?? cams.first else {
-            lastError = "No camera is connected. Plug in the Sony (USB) and switch it on."; return lastError
+        // never a silent fallback: the wanted camera, or "missing" (a take on the MacBook camera would be a lost take)
+        guard let cam = (w.isEmpty ? cams.first : cams.first(where: { $0.localizedName.lowercased().contains(w) })) else {
+            missing = true
+            queue.async { if self.session.isRunning { self.session.stopRunning() } }
+            lastError = "SONY NOT CONNECTED: switch it on, USB Streaming (wanted: \(wantedCamera))."; return lastError
         }
+        missing = false
         var mic: AVCaptureDevice? = nil
         if Self.micStatus() == .authorized {
             let m = wantedMic.lowercased()
@@ -123,7 +134,12 @@ final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                     let input = try AVCaptureDeviceInput(device: cam)
                     if self.session.canAddInput(input) { self.session.addInput(input); self.videoIn = input } else { e = "\(cam.localizedName) cannot be added." }
                 } catch { e = "\(cam.localizedName) cannot be opened: \(error.localizedDescription)" }
-                self.session.sessionPreset = self.session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : (self.session.canSetSessionPreset(.high) ? .high : .medium)
+                if let f = Self.format4K(cam), (try? cam.lockForConfiguration()) != nil {
+                    cam.activeFormat = f; cam.unlockForConfiguration()
+                    self.session.sessionPreset = .inputPriority
+                } else {
+                    self.session.sessionPreset = self.session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : (self.session.canSetSessionPreset(.high) ? .high : .medium)
+                }
                 if self.session.canAddOutput(self.videoOut) { self.session.addOutput(self.videoOut) }
                 if let mic, let a = try? AVCaptureDeviceInput(device: mic), self.session.canAddInput(a) {
                     self.session.addInput(a); self.audioIn = a
@@ -159,6 +175,15 @@ final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         guard !isRecording else { return }
         queue.async { if self.session.isRunning { self.session.stopRunning() } }
         layer.flushAndRemoveImage()
+    }
+
+    /// the camera's own 4K (3840x2160 or wider) at 25 or 30 fps, when it offers one: the vertical strip is then cut from the full-resolution frame
+    private static func format4K(_ d: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        d.formats.first { f in
+            let dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+            return dim.width >= 3840 && dim.height >= 2160 && dim.height <= 2160
+                && f.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= 30 && $0.maxFrameRate >= 25 }
+        }
     }
 
     private static func wholeFrameRate(_ d: AVCaptureDevice) -> Int32 {

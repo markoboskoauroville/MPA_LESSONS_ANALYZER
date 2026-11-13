@@ -48,7 +48,14 @@ final class WatchScreen: ObservableObject {
         if let n = n { shotN = n } else if shotN == 0 { shotN = Shoot.shared.current?.n ?? 0 }
         live = true
         present()
-        Task { _ = await Shoot.shared.prepareCamera() }
+        Task {
+            // reconnects by itself the moment the camera appears
+            while self.live && self.visible {
+                if await Shoot.shared.prepareCamera() == nil { break }
+                if !Shoot.shared.cameraMissing { break }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
     }
 
     func show(shot n: Int) {
@@ -157,7 +164,13 @@ struct WatchView: View {
             ZStack {
                 Color.black
                 if w.live || sh.recording { LiveView() } else { FullPlayer(player: st.player) }
-                if w.live && !sh.recording && !sh.cameraInfo.isEmpty {
+                if sh.cameraMissing {
+                    VStack(spacing: 16) {
+                        Text("SONY NOT CONNECTED").font(.system(size: 64, weight: .bold)).foregroundStyle(.red)
+                        Text("Switch it on, USB Streaming. This screen continues by itself.").font(.system(size: 28)).foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                if w.live && !sh.recording && !sh.cameraInfo.isEmpty && !sh.cameraMissing {
                     VStack { Spacer(); Text(sh.cameraInfo).font(.system(size: 18)).foregroundStyle(.white.opacity(0.6)).padding(.bottom, 220) }
                 }
                 if sh.recording {
