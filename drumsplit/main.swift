@@ -27,6 +27,7 @@ var autoAlign = true
 var lsGain = false
 var noDefaults = false
 var floatOut = false
+var preset: String? = nil
 var sens = 1.0
 var quietDb = 18.0
 var auType = "aufx", auSub = "cler", auMfr = "Sptn"
@@ -48,6 +49,7 @@ while ai < argv.count {
     case "--no-defaults": noDefaults = true
     case "--float": floatOut = true
     case "--detect-only": detectOnly = true
+    case "--preset": preset = nextArg()
     case "--sens": sens = Double(nextArg()) ?? 1.0
     case "--quiet-db": quietDb = Double(nextArg()) ?? 18.0
     case "--au":
@@ -65,6 +67,7 @@ while ai < argv.count {
           --block N       render block in frames (default 16384)
           --float         write 32-bit float WAVs (default 24-bit)
           --detect-only   treat the input as a drums track: only write strokes.json
+          --preset n      load a factory preset of the plug-in (number or name) before the parameters
           --sens x        stroke detector sensitivity (default 1, higher = more strokes)
           --quiet-db x    strokes more than x dB below the loud strokes are K (default 18)
           --au t/s/m      other Audio Unit, default aufx/cler/Sptn
@@ -143,6 +146,8 @@ func setParam(_ params: [AUParameter], _ name: String, _ val: String) -> Bool {
 
 /// Guessed "voice only" setting from the parameter names; refined once the real tree is known (--list-params).
 func applyVoiceOnlyDefaults(_ params: [AUParameter]) {
+    // Supertone Clear v1.1.1: "Voice Solo" plays only the voice component (tree read on 13.11.2026).
+    if params.contains(where: { $0.displayName.lowercased() == "voice solo" }) { setParam(params, "voice solo", "1"); return }
     for p in params {
         let n = (p.displayName + " " + p.identifier).lowercased()
         if n.contains("bypass") { setParam(params, p.identifier, "min") }
@@ -435,6 +440,11 @@ catch { fail("offline rendering mode failed: \(error)") }
 do { try engine.start() } catch { fail("engine start failed: \(error)") }
 
 let allParams = unit.auAudioUnit.parameterTree?.allParameters ?? []
+if let pr = preset {
+    let list = unit.auAudioUnit.factoryPresets ?? []
+    if let m = list.first(where: { String($0.number) == pr || $0.name.lowercased().contains(pr.lowercased()) }) { unit.auAudioUnit.currentPreset = m; say("preset: \(m.number) \(m.name)") }
+    else { say("preset not found: \(pr)") }
+}
 if !noDefaults { say("voice-only defaults:"); applyVoiceOnlyDefaults(allParams) }
 if !overrides.isEmpty { say("overrides:"); for (k, v) in overrides { setParam(allParams, k, v) } }
 say("plug-in latency \(latFrames) frames (\(String(format: "%.1f", Double(latFrames) / SR * 1000)) ms), tail \(tailFrames) frames, block \(block)")
