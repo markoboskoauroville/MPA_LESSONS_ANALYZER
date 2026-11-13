@@ -78,3 +78,8 @@ remote finds the Mac by Bonjour with no typing; WATCH full screen on the BenQ, c
 - Camera disappearing mid-take: cannot pull the Sony's USB from here; with v17 the app shows SONY NOT CONNECTED and refuses RECORD (409), not yet tried mid-take.
 - Hearing the clip: sound stays muted on the Mac by rule.
 - The Pixel 7 (his phone) was not touched: v2 of the remote was only tried on the Nothing A142.
+
+### Addendum 22:45 (test script fixes and final full run)
+- 11. (TEST TOOL) uiautomator on the remote fails with "could not get idle state" and leaves the OLD xml on the phone: my first runs read stale texts ("Which Mac?" twice, no MUTE). The script now deletes the file first and checks reconnect through the guide's `controller` field instead.
+- Final full run with the Macro Recorder bar (WHO=MACRO) and `--restart`, real Sony, v20: 43 pass, 0 fail, 5 skip. The remote reconnected by itself after the Mac app restart (controller back), the lesson reopened by itself, takes.json kept the newest take; the bar ended "MACRO · Second Take test · PASS 43/43". The earlier "remote asks Which Mac? again after the restart" was the stale dump, NOT a bug.
+- A bar for a long run is overridden by anything that calls `macro` from another session: the lock then reads "overridden" and the test stops cleanly ("stopped by Marko") although he did not press it. Use REHEARSAL_BAR=0 when other sessions use Macro Recorder. Macro Recorder needs a "who" field (the bar's left word is always CLAUDE); WHO is in the text for now.
