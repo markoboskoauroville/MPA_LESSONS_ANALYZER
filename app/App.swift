@@ -1,11 +1,20 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 20
+let VERSION = 21
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         Task { @MainActor in Store.shared.startServer() }
+    }
+    /// never quit in the middle of a take
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if MainActor.assumeIsolated({ Shoot.shared.recording }) {
+            NSSound.beep()
+            MainActor.assumeIsolated { Shoot.shared.status = "Recording: press STOP first, the app will not quit in the middle of a take." }
+            return .terminateCancel
+        }
+        return .terminateNow
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ a: NSApplication) -> Bool { false }
 }

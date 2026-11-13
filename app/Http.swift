@@ -8,6 +8,7 @@ final class Http: @unchecked Sendable {
     /// LAN listener (all interfaces, Bonjour): only private local networks and Tailscale may call, and only the protocol's shooting actions
     var lan = false
     var bonjour: String?
+    var onFailed: ((UInt16) -> Void)?
     private var listener: NWListener?
 
     func start(_ p: UInt16, tries: Int = 16) {
@@ -20,14 +21,14 @@ final class Http: @unchecked Sendable {
             l.stateUpdateHandler = { [weak self] st in
                 switch st {
                 case .ready: self?.onReady?(p)
-                case .failed: l.cancel(); self?.start(p + 1, tries: tries - 1)
+                case .failed: l.cancel(); if tries > 1 { self?.start(p + 1, tries: tries - 1) } else { self?.onFailed?(p) }
                 default: break
                 }
             }
             l.newConnectionHandler = { [weak self] c in self?.serve(c) }
             l.start(queue: .global())
             listener = l
-        } catch { start(p + 1, tries: tries - 1) }
+        } catch { if tries > 1 { start(p + 1, tries: tries - 1) } else { onFailed?(p) } }
     }
 
     /// loopback, 10/8, 172.16/12, 192.168/16, link-local, Tailscale 100.64/10 (and fd7a:115c:a1e0::/48), nothing else

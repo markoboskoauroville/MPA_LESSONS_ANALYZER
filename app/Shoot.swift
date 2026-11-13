@@ -128,6 +128,7 @@ final class Shoot: ObservableObject {
         }
         takes.removeAll { !$0.path.isEmpty && !FileManager.default.fileExists(atPath: $0.path) }   // moved or deleted files do not linger
         skipped = Set((o["skipped"] as? [Any] ?? []).map { Int(num($0)) })
+        ignored = Set((o["ignored"] as? [String] ?? []))
         for (k, v) in (o["edits"] as? [String: String] ?? [:]) { if let n = Int(k) { edits[n] = v } }
     }
 
@@ -136,9 +137,35 @@ final class Shoot: ObservableObject {
             "video": store.videoName,
             "takes": takes.map { ["shot": $0.shot, "path": $0.path, "duration": $0.duration, "kept": $0.kept, "note": $0.note] as [String: Any] },
             "skipped": skipped.sorted(),
+            "ignored": ignored.sorted(),
             "edits": Dictionary(uniqueKeysWithValues: edits.map { (String($0.key), $0.value) }),
         ]
         if let d = try? JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys]) { try? d.write(to: URL(fileURLWithPath: takesPath)) }
+    }
+
+    /// at start: take files of this lesson in ~/Movies that takes.json does not list (a restart in the middle of a take) are listed again as "recovered";
+    /// the current shot returns to the shot of the newest take
+    func recoverTakes() {
+        loadTakes()
+        let dir = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        let prefix = lessonLabel + " · shot "
+        var newest: (Date, Int)? = nil
+        var changed = false
+        for n in names where n.hasPrefix(prefix) && n.hasSuffix(".mov") {
+            let path = dir.appendingPathComponent(n).path
+            let rest = n.dropFirst(prefix.count)
+            guard let shot = Int(rest.prefix { $0.isNumber }) else { continue }
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+            let mod = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
+            if newest == nil || mod > newest!.0 { newest = (mod, shot) }
+            if takes.contains(where: { $0.path == path }) || ignored.contains(path) { continue }
+            let dur = CMTimeGetSeconds(AVURLAsset(url: URL(fileURLWithPath: path)).duration)
+            takes.append(Take(shot: shot, path: path, duration: dur.isFinite ? dur : 0, kept: false, note: "recovered"))
+            changed = true
+        }
+        if changed { saveTakes(); log.append("recovered takes listed again") }
+        if let n = newest?.1, !recording { focus(shot: n) }
     }
 
     func takesJSON() -> Data {
@@ -230,6 +257,7 @@ final class Shoot: ObservableObject {
     @Published var finishRunning = false
     @Published var finishSummary = ""
     var finishJSON: Any? = nil
+    var ignored: Set<String> = []     // deleted takes: the recovery scan leaves them alone
 
     func finishRun(unkept: Bool = false, dry: Bool = false) {
         guard !finishRunning else { return }
@@ -274,9 +302,14 @@ final class Shoot: ObservableObject {
     func again(dry: Bool = false) {
         Task {
             if recording { await stopRecording() }
-            if !dry, let p = pending { deleteTake(path: p.path, trash: false) }
+            var gone = ""
+            // the last take of this shot stays listed, marked (discarded), so a mistaken AGAIN loses nothing
+            if !dry, let s = current, let i = takes.lastIndex(where: { $0.shot == s.n && !$0.note.contains("(discarded)") }) {
+                takes[i].note += (takes[i].note.isEmpty ? "" : " ") + "(discarded)"; saveTakes()
+                gone = "Take \(takes.filter { $0.shot == s.n }.count) discarded. "
+            }
             if !dry { pending = nil }
-            if let s = current { status = "Ready for take \(takes.filter { $0.shot == s.n }.count + 1) of shot \(s.n). Press RECORD."; WatchScreen.shared.showLive(shot: s.n) }
+            if let s = current { status = gone + "Ready for take \(takes.filter { $0.shot == s.n }.count + 1) of shot \(s.n). Press RECORD."; WatchScreen.shared.showLive(shot: s.n) }
         }
     }
 
@@ -284,6 +317,7 @@ final class Shoot: ObservableObject {
     @discardableResult func deleteTake(path: String, trash: Bool) -> Bool {
         guard let i = takes.firstIndex(where: { $0.path == path }) else { return false }
         takes.remove(at: i)
+        ignored.insert(path)
         if pending?.path == path { pending = nil }
         if trash, FileManager.default.fileExists(atPath: path) { try? FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil) }
         saveTakes()

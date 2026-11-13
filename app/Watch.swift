@@ -171,7 +171,7 @@ struct WatchView: View {
                     }
                 }
                 if w.live && !sh.recording && !sh.cameraInfo.isEmpty && !sh.cameraMissing {
-                    VStack { Spacer(); Text(sh.cameraInfo).font(.system(size: 18)).foregroundStyle(.white.opacity(0.6)).padding(.bottom, 220) }
+                    VStack { Text(sh.cameraInfo).font(.system(size: 18)).foregroundStyle(.white.opacity(0.6)).padding(.top, 36); Spacer() }
                 }
                 if sh.recording {
                     VStack {
@@ -190,7 +190,7 @@ struct WatchView: View {
                     }
                     Spacer()
                     VStack(spacing: 18) {
-                        if !sh.status.isEmpty && !playing {
+                        if !sh.status.isEmpty && !playing && !w.live && !sh.recording {
                             Text(sh.status).font(.system(size: 20)).foregroundStyle(.white.opacity(0.75)).multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
                         }

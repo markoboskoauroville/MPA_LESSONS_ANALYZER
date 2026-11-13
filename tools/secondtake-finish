@@ -75,7 +75,7 @@ def safe(t):
 def pick_takes(d, shots, unkept):
     out = []
     for sh in shots:
-        ts = [t for t in d["takes"] if t["shot"] == sh["n"] and os.path.exists(t["path"])]
+        ts = [t for t in d["takes"] if t["shot"] == sh["n"] and os.path.exists(t["path"]) and "(discarded)" not in t.get("note", "")]
         k = [t for t in ts if t.get("kept")]
         t = k[-1] if k else (ts[-1] if ts and unkept else None)
         if t and "(discarded)" not in t.get("note", ""):
