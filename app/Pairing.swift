@@ -25,6 +25,10 @@ final class Pairing {
             let p = String(format: "%06d", Int.random(in: 0...999_999))
             pending = p; shownAt = Date()
             WatchScreen.shared.showPair(p)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                if self?.pending == p { self?.pending = nil; WatchScreen.shared.clearPair() }
+            }
         }
         return false
     }

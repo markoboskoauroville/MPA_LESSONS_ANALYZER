@@ -16,7 +16,7 @@ final class Http: @unchecked Sendable {
         do {
             let params = NWParameters.tcp
             if !lan { params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port) }
-            let l = try NWListener(using: params, on: port)
+            let l = lan ? try NWListener(using: params, on: port) : try NWListener(using: params)
             if let t = bonjour { l.service = NWListener.Service(name: "Second Take", type: t) }
             l.stateUpdateHandler = { [weak self] st in
                 switch st {
