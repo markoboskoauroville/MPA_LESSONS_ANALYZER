@@ -1,6 +1,43 @@
 import SwiftUI
 import AVKit
+import AVFoundation
 import AppKit
+
+/// The Sony's live picture, only as a monitor (no file): the middle 9:16 strip, the same cut the vertical slice records.
+final class LivePreviewView: NSView {
+    private let session = AVCaptureSession()
+    private let layerP = AVCaptureVideoPreviewLayer()
+    var name = ""
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer = CALayer(); layer?.backgroundColor = NSColor.black.cgColor; layer?.masksToBounds = true
+        layerP.session = session; layerP.videoGravity = .resizeAspectFill
+        layer?.addSublayer(layerP)
+        let devs = AVCaptureDevice.DiscoverySession(deviceTypes: [.external, .builtInWideAngleCamera], mediaType: .video, position: .unspecified).devices
+        if let d = devs.first(where: { $0.localizedName.contains("ILCE") }) ?? devs.first, let inp = try? AVCaptureDeviceInput(device: d) {
+            name = d.localizedName
+            session.beginConfiguration()
+            if session.canAddInput(inp) { session.addInput(inp) }
+            session.commitConfiguration()
+            DispatchQueue.global().async { [session] in session.startRunning() }
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() {
+        super.layout()
+        let h = bounds.height, w = h * 9 / 16
+        layerP.frame = NSRect(x: (bounds.width - w) / 2, y: 0, width: w, height: h)
+    }
+    func stop() { let s = session; DispatchQueue.global().async { s.stopRunning() } }
+    deinit { session.stopRunning() }
+}
+
+struct LiveView: NSViewRepresentable {
+    func makeNSView(context: Context) -> LivePreviewView { LivePreviewView(frame: .zero) }
+    func updateNSView(_ v: LivePreviewView, context: Context) {}
+    static func dismantleNSView(_ v: LivePreviewView, coordinator: ()) { v.stop() }
+}
 
 final class WatchWindow: NSWindow {
     override var canBecomeKey: Bool { true }
@@ -25,6 +62,7 @@ struct FullPlayer: NSViewRepresentable {
 final class WatchScreen: ObservableObject {
     static let shared = WatchScreen()
     @Published var visible = false
+    @Published var live = false
     @Published var lastMove = Date()
     private var window: WatchWindow?
     private var keyMon: Any?
@@ -33,9 +71,21 @@ final class WatchScreen: ObservableObject {
 
     var screen: NSScreen { NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0] }
 
+    /// The live Sony picture full screen, without recording (framing).
+    func showLive(shot n: Int? = nil) {
+        if let n = n { shotN = n } else if shotN == 0 { shotN = Shoot.shared.current?.n ?? 0 }
+        live = true
+        present()
+    }
+
     func show(shot n: Int) {
         shotN = n
+        live = false
         Shoot.shared.focus(shot: n)
+        present()
+    }
+
+    private func present() {
         if window == nil {
             let w = WatchWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
             w.isOpaque = true; w.backgroundColor = .black; w.hasShadow = false
@@ -58,7 +108,7 @@ final class WatchScreen: ObservableObject {
     func hide() {
         guard visible else { return }
         window?.orderOut(nil)
-        visible = false
+        visible = false; live = false
         if let k = keyMon { NSEvent.removeMonitor(k); keyMon = nil }
         if let m = moveMon { NSEvent.removeMonitor(m); moveMon = nil }
     }
@@ -72,11 +122,14 @@ final class WatchScreen: ObservableObject {
 
     func recordPressed() {
         Store.shared.stopPlayback()
+        live = true
         Shoot.shared.focus(shot: shotN)
         Shoot.shared.toggleRecord()
     }
 
-    func watchAgain() { Store.shared.watchShot(shotN) }
+    func watchAgain() { live = false; Store.shared.watchShot(shotN) }
+
+    var mode: String { Shoot.shared.recording ? "record" : (!visible ? "idle" : (live ? "live" : (Store.shared.watchingShot != nil || Store.shared.playingAll ? "watch" : "idle"))) }
 
     private func installKeys() {
         if keyMon == nil {
@@ -97,7 +150,7 @@ final class WatchScreen: ObservableObject {
 
     func info() -> [String: Any] {
         let f = screen.frame
-        return ["visible": visible, "shot": shotN, "recording": Shoot.shared.recording,
+        return ["mode": mode, "visible": visible, "shot": shotN, "recording": Shoot.shared.recording,
                 "screen": screen.localizedName, "frame": [f.origin.x, f.origin.y, f.size.width, f.size.height]]
     }
 }
@@ -116,22 +169,23 @@ struct WatchView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
-            let showControls = !playing || ctx.date.timeIntervalSince(w.lastMove) < 3
+            let showControls = (!playing && !w.live && !sh.recording) || ctx.date.timeIntervalSince(w.lastMove) < 3
             ZStack {
                 Color.black
-                FullPlayer(player: st.player).opacity(sh.recording ? 0 : 1)
+                if w.live || sh.recording { LiveView() } else { FullPlayer(player: st.player) }
                 if sh.recording {
-                    VStack(spacing: 18) {
-                        HStack(spacing: 14) {
-                            Circle().fill(Color.red).frame(width: 22, height: 22)
-                            Text("REC").font(.system(size: 34, weight: .semibold, design: .rounded)).foregroundStyle(.red)
+                    VStack {
+                        HStack(spacing: 10) {
+                            Circle().fill(Color.red).frame(width: 16, height: 16)
+                            Text(fmtTime(ctx.date.timeIntervalSince(sh.recSince))).font(.system(size: 28, weight: .medium, design: .monospaced)).foregroundStyle(.white)
+                            Spacer()
                         }
-                        Text(fmtTime(ctx.date.timeIntervalSince(sh.recSince))).font(.system(size: 120, weight: .light, design: .monospaced)).foregroundStyle(.white)
-                        Text(title).font(.system(size: 26)).foregroundStyle(.white.opacity(0.7))
+                        .padding(.leading, 40).padding(.top, 36)
+                        Spacer()
                     }
                 }
                 VStack(spacing: 0) {
-                    if !playing && !sh.recording {
+                    if !playing && !sh.recording && !w.live {
                         Text(title).font(.system(size: 26)).foregroundStyle(.white.opacity(0.85)).padding(.top, 48)
                     }
                     Spacer()

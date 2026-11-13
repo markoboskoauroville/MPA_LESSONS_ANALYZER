@@ -240,6 +240,7 @@ final class Shoot: ObservableObject {
         if (r["_status"] as? Int ?? 0) >= 400 { cameraMissing("record/start: \(r["error"] as? String ?? "refused")"); return }
         recording = true; recStart = Date()
         status = "Recording shot \(s.n)."
+        WatchScreen.shared.showLive(shot: s.n)
     }
 
     func stopRecording() async {

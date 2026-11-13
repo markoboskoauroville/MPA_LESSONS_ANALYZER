@@ -566,7 +566,7 @@ final class Store: ObservableObject {
          "fullTranscriptFile": fullPath, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
          "remarks": analysis.remarks.count, "error": error, "lang": lang,
          "transcriptFile": videoURL == nil ? "" : transcriptPath, "analysisFile": videoURL == nil ? "" : analysisPath,
-         "exportFolder": exportFolder]
+         "exportFolder": exportFolder, "mode": WatchScreen.shared.mode, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
     }
 
     func route(_ method: String, _ path: String, _ body: Data) -> (Int, Data) {
@@ -621,6 +621,26 @@ final class Store: ObservableObject {
             guard shots.contains(where: { $0.n == n }) else { return (404, jsonData(["error": "no shot \(n); GET /shots"])) }
             if watchingShot != n { watchShot(n) }
             return (200, jsonData(["watching": n]))
+        case ("POST", "/live"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if (o["on"] as? Bool) == false { if !Shoot.shared.recording { WatchScreen.shared.hide() } }
+            else { stopPlayback(); WatchScreen.shared.showLive(shot: o["shot"].map { Int(num($0)) }) }
+            return (200, jsonData(WatchScreen.shared.info()))
+        case ("POST", "/record"), ("POST", "/record/start"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if let n = o["shot"].map({ Int(num($0)) }) { Shoot.shared.focus(shot: n) }
+            stopPlayback()
+            if !Shoot.shared.recording { Shoot.shared.toggleRecord() }
+            return (202, jsonData(["starting": true, "shot": Shoot.shared.current?.n ?? 0]))
+        case ("POST", "/record/stop"):
+            if Shoot.shared.recording { Shoot.shared.toggleRecord() }
+            return (202, jsonData(["stopping": true]))
+        case ("POST", "/next"):
+            Shoot.shared.perform("next")
+            return (200, jsonData(["current": Shoot.shared.current?.n ?? 0]))
+        case ("POST", "/again"):
+            Shoot.shared.perform("again")
+            return (202, jsonData(["current": Shoot.shared.current?.n ?? 0]))
         case ("GET", "/screen"):
             return (200, jsonData(WatchScreen.shared.info()))
         case ("POST", "/stop"):
@@ -659,7 +679,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }
