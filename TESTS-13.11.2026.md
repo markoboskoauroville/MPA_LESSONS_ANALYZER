@@ -30,3 +30,12 @@
 
 Tester mistake: my POST /again on the LAN listener started a real take, ~/Movies/Lesson 12.11.2026 · shot 2 · TR01 · take 1.mov (27 MB). Not deleted.
 Bugs ranked: 1) AGAIN starts recording at once, no dry-run exists; 2) /again answers 202; 3) bad /shot input gives 404.
+
+## OBS end-to-end recording test (13.11.2026, evening)
+
+Marko, word for word: "For testing the second take, please, on the desktop, I want to see all the clips you generated, mockup clips, and I will watch them. So, make a mockup. Load the generated clips to the OBS. Play them through virtual camera and record them through second take. And make sure everything is recorded correctly. So basically our OBS is simulating the real camera and person in front of it."
+Marko, word for word: "Please make another layer in OBS to check for frozen frames because nothing is moving ... I like we were doing that we were testing Video Ninja. There were some dots flying on the screen. It was nice test. I want to see it now also as a test of movement, overlaid over my frozen picture"
+
+Setup: OBS 32.2.2, collection SecondTakeMock, scene "Second Take mock", 1080x1920 at 25 fps, ffmpeg media source (take) + overlay of 7 moving dots with frame counter F and time T; Start Virtual Camera; OBS audio monitoring to BlackHole 2ch; Second Take camera "OBS Virtual Camera", mic "BlackHole 2ch".
+Result: shots 1, 2, 8 recorded as HEVC 1080x1920 25 fps + AAC 48 kHz; counter read on every frame went up by exactly 1 (no dropped, no duplicated, no frozen frames). Files in ~/Desktop/Second Take mock 13.11.2026/.
+Findings: (1) the Live and REC view always opens on the BenQ (Watch.swift screen = NSScreen.screens.first). (2) a second take of a shot gets the name "... take 2.mov" and an existing file gets an "mb_<date>" prefix; takes.json keeps entries of earlier runs. (3) the recorded duration is the time between REC and STOP, not the clip length. (4) OBS media-source audio went silent after about two file switches (OBS side, not the app): fixed by creating a fresh media input per take.
