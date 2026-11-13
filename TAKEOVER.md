@@ -28,3 +28,12 @@ Shooting assistant (Beatrice voice, Sony via Webcam Recorder, Resolve grade/trim
 - Camera built in (Camera.swift, Recorder.swift, Slicer.swift copied from Webcam Recorder; no port 8867): Sony ILCE-7M5 first, vertical 9:16 slice, HEVC .mov with time code, file ~/Movies/<take name>.mov. SEEN: live picture of the Sony full screen on the BenQ, REC dot and time, a take file was created (by the tester) named "Lesson 12.11.2026 · shot 2 · TR01 · take 1.mov".
 - Mute (clips start muted, MUTE/UNMUTE in the full-screen group, POST /mute) and ducking while :8837 /speaking plays. Last video reopened at start. POST /takes/add, finish prompt (safe names, mp4 hvc1+aac, silence rule).
 - Second Take protocol: LAN listener :8966 (Bonjour _secondtake._tcp), private/Tailscale sources only, protocol actions only; NO pairing codes; first come first served by X-Remote-Id (423 {"busy","owner"}), 30 s silence or RELEASE (button, POST /release) frees it; loopback :8965 is the full local API and never locked. /status has controller.
+
+## Finisher: tools/secondtake-finish (13.11.2026)
+`secondtake-finish [Lesson 2] [--takes F] [--out DIR] [--lut F.cube] [--unkept] [--dry-run] [--json]`; `--serve [8966]` gives
+POST /finish (JSON body: lesson, takes, out, lut, unkept). No LLM, no paid call. Per kept take: silencedetect -55 dB trim
+(0.15 s before, 0.3 s after), hevc_videotoolbox 10M hvc1 + AAC 192k, 1080x1920, "Lesson 2 - 5 Title.mp4", ffprobe self-check
+(hvc1, aac, size, duration = trim, peak < 0 dBFS), LESSON_DRAFT.md next to the clips. Upload and website wait for Marko.
+Grade: his film look is a Resolve Color-page DRX (~/ElevateMedia/tools/filmlook), not a LUT, so ffmpeg SKIPS it and says so
+(--lut applies a real .cube). The Resolve route (dedicated project "SecondTake <date>") is not implemented: Resolve was not
+running and a scripted DRX grade there is crash-prone.
