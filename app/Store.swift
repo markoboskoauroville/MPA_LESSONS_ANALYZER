@@ -594,7 +594,7 @@ final class Store: ObservableObject {
          "fullTranscriptFile": fullPath, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
          "remarks": analysis.remarks.count, "error": error, "lang": lang,
          "transcriptFile": videoURL == nil ? "" : transcriptPath, "analysisFile": videoURL == nil ? "" : analysisPath,
-         "exportFolder": exportFolder, "protocol": 1, "name": "MPA Lessons Analyzer (Mantra)", "controller": Controller.shared.ownerName ?? "", "shot": Shoot.shared.current?.n ?? 0, "takes": Shoot.shared.takes.filter { $0.shot == (Shoot.shared.current?.n ?? 0) }.count, "mode": WatchScreen.shared.mode, "muted": muted, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
+         "exportFolder": exportFolder, "protocol": 1, "name": "MPA Lessons Analyzer (Mantra)", "controller": Controller.shared.ownerName ?? "", "shot": Shoot.shared.current?.n ?? 0, "takes": Shoot.shared.takes.filter { $0.shot == (Shoot.shared.current?.n ?? 0) }.count, "mode": WatchScreen.shared.mode, "muted": muted, "clipVolume": Double(player.volume), "ducked": ducked, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
     }
 
     func route(_ method: String, _ path: String, _ body: Data, lan: Bool = false) -> (Int, Data) {
