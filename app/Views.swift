@@ -60,7 +60,7 @@ struct ContentView: View {
                 Divider()
             }
             if s.videoURL != nil {
-                VideoPlayer(player: s.player).frame(height: 260)
+                PlayerPane(player: s.player).frame(height: 260)
                 Divider()
             }
             TableView()
@@ -221,5 +221,18 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(minWidth: 420, idealWidth: 480, maxWidth: .infinity, minHeight: 260)
+    }
+}
+
+struct PlayerPane: NSViewRepresentable {
+    let player: AVPlayer
+    func makeNSView(context: Context) -> AVPlayerView {
+        let v = AVPlayerView()
+        v.player = player
+        v.controlsStyle = .inline
+        return v
+    }
+    func updateNSView(_ v: AVPlayerView, context: Context) {
+        if v.player !== player { v.player = player }
     }
 }

@@ -6,7 +6,7 @@ V=$(sed -n 's/^let VERSION = \([0-9]*\)/\1/p' app/App.swift)
 NAME="MPA Lessons Analyzer (Mantra)"
 APP="build/$NAME.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -o "$APP/Contents/MacOS/MPALessonsAnalyzer" app/*.swift
+swiftc -O -swift-version 5 -framework AVKit -framework AVFoundation -framework AppKit -framework Network -o "$APP/Contents/MacOS/MPALessonsAnalyzer" app/*.swift
 cp icon/AppIcon.icns "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
