@@ -63,11 +63,15 @@ final class Http: @unchecked Sendable {
             guard let self = self else { c.cancel(); return }
             var buf = acc
             if let d = data { buf.append(d) }
-            if let (m, p, body, code0) = Http.parse(buf) {
+            if let (m, p, body, hdr) = Http.parse(buf) {
                 Task {
                     if self.lan {
                         guard Http.sourceOK(c) else { c.cancel(); return }
                         let ok: Set<String> = ["GET /status", "GET /shots", "POST /watch", "POST /live", "POST /record", "POST /stop", "POST /next", "POST /again", "POST /shot", "POST /mute"]
+                        let who = hdr["id"] ?? { if case let .hostPort(h, _) = c.endpoint { return "ip-\(h)" }; return "unknown" }()
+                        let name = hdr["name"] ?? "Remote"
+                        let (allowed, owner) = await MainActor.run { Controller.shared.admit(who, name) }
+                        guard allowed else { Http.send(c, 423, Data("{\"busy\":true,\"owner\":\"\(owner)\"}".utf8)); return }
                         guard ok.contains("\(m) \(p)") else { Http.send(c, 404, Data("{\"error\":\"not part of the Second Take protocol\"}".utf8)); return }
                     }
                     let (code, out) = await self.handler?(m, p, body, self.lan) ?? (500, Data())
@@ -78,27 +82,28 @@ final class Http: @unchecked Sendable {
         }
     }
 
-    static func parse(_ buf: Data) -> (String, String, Data, String?)? {
+    static func parse(_ buf: Data) -> (String, String, Data, [String: String])? {
         guard let r = buf.range(of: Data("\r\n\r\n".utf8)) else { return nil }
         let head = String(decoding: buf[buf.startIndex..<r.lowerBound], as: UTF8.self)
         let lines = head.components(separatedBy: "\r\n")
         let parts = lines[0].split(separator: " ")
         guard parts.count >= 2 else { return nil }
         var len = 0
-        var pair: String? = nil
+        var hdr: [String: String] = [:]
         for l in lines.dropFirst() {
             let lo = l.lowercased()
             if lo.hasPrefix("content-length:") { len = Int(l.dropFirst(15).trimmingCharacters(in: .whitespaces)) ?? 0 }
-            if lo.hasPrefix("x-pair-code:") { pair = l.dropFirst(12).trimmingCharacters(in: .whitespaces) }
+            if lo.hasPrefix("x-remote-id:") { hdr["id"] = l.dropFirst(12).trimmingCharacters(in: .whitespaces) }
+            if lo.hasPrefix("x-remote-name:") { hdr["name"] = l.dropFirst(14).trimmingCharacters(in: .whitespaces) }
         }
         let body = buf[r.upperBound...]
         if body.count < len { return nil }
         let path = String(parts[1]).components(separatedBy: "?")[0]
-        return (String(parts[0]), path, Data(body.prefix(len)), pair)
+        return (String(parts[0]), path, Data(body.prefix(len)), hdr)
     }
 
     static func send(_ c: NWConnection, _ code: Int, _ body: Data) {
-        let text = [200: "OK", 202: "Accepted", 401: "Unauthorized", 400: "Bad Request", 404: "Not Found", 409: "Conflict"][code] ?? "Error"
+        let text = [200: "OK", 202: "Accepted", 401: "Unauthorized", 423: "Locked", 400: "Bad Request", 404: "Not Found", 409: "Conflict"][code] ?? "Error"
         var out = Data("HTTP/1.1 \(code) \(text)\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
         out.append(body)
         c.send(content: out, completion: .contentProcessed { _ in c.cancel() })

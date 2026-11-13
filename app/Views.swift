@@ -46,6 +46,7 @@ struct ContentView: View {
     @EnvironmentObject var s: Store
     @State private var showSettings = false
     @ObservedObject private var shoot = Shoot.shared
+    @ObservedObject private var ctl = Controller.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,6 +83,10 @@ struct ContentView: View {
             Text("MPA Lessons Analyzer (Mantra)").font(.headline)
             Text("v\(VERSION)").foregroundStyle(.secondary)
             Spacer()
+            if let o = ctl.ownerName {
+                Button("RELEASE \(o)") { ctl.release() }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("The remote \(o) controls this app; release it so another remote can connect")
+            }
             if CameraEngine.permissionsMissing {
                 Button("PERMISSIONS") { CameraEngine.openPermissions() }.buttonStyle(.plain).foregroundStyle(Color.orange)
                     .help("Camera or microphone is not allowed yet: opens the switch in System Settings")

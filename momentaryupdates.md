@@ -40,3 +40,7 @@ Marko (name): "second take is great. Name. Let's do it"
 ## 13.11.2026: no pairing
 Marko: "I don't need this workflow to type codes remove it. No typing of any codes, please. Remote controller know how to speak with an app and that's it ... let's just forget this security thing. Let's make it work without any code exchanges"
 **Status:** v11: no code, no X-Pair-Code, nothing on the BenQ; Bonjour _secondtake._tcp; the LAN listener (:8966) accepts only private/Tailscale source addresses and only the protocol's shooting actions; loopback :8965 stays the full local API.
+
+## 13.11.2026: first come, first served
+Marko: "first come, first served. If my app is searching for the session of SecondTake and it finishes it, then they are in connection, and nothing else can connect. Simple"
+**Status:** v12: the first remote on the LAN listener (header X-Remote-Id, name X-Remote-Name) owns the session; others get 423 {"busy":true,"owner":name}; freed after 30 s silence or RELEASE (button in the app, POST /release); loopback never blocked; /status "controller".
