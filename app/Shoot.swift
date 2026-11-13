@@ -224,6 +224,45 @@ final class Shoot: ObservableObject {
         if open { await speak("Take saved, \(Int(d.rounded())) seconds. Keep it, or again?") }
     }
 
+    // MARK: FINISH: the secondtake-finish tool (trim, export mp4 H.265 + AAC, LESSON_DRAFT.md), run as a subprocess, no second server
+    @Published var finishRunning = false
+    @Published var finishSummary = ""
+    var finishJSON: Any? = nil
+
+    func finishRun(unkept: Bool = false, dry: Bool = false) {
+        guard !finishRunning else { return }
+        loadTakes(); saveTakes()
+        finishRunning = true; finishSummary = "Finishing the lesson (trim, export)..."
+        let tool = NSHomeDirectory() + "/.local/bin/secondtake-finish"
+        var args = [tool, "--json", "--takes", takesPath, "--analysis", store.analysisPath,
+                    "--out", ((store.exportFolder as NSString).expandingTildeInPath as NSString).appendingPathComponent("MPA Lesson 2")]
+        if unkept { args.append("--unkept") }
+        if dry { args.append("--dry-run") }
+        Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            p.arguments = ["python3"] + args
+            var env = ProcessInfo.processInfo.environment
+            env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.pyenv/shims:\(NSHomeDirectory())/.local/bin:/usr/bin:/bin"
+            p.environment = env
+            let pipe = Pipe(); p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+            var out = Data()
+            do { try p.run(); out = pipe.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit() } catch {}
+            let obj = try? JSONSerialization.jsonObject(with: out)
+            await MainActor.run {
+                self.finishRunning = false
+                self.finishJSON = obj
+                guard let o = obj as? [String: Any] else { self.finishSummary = "PROBLEM: the finish tool gave no result (is ~/.local/bin/secondtake-finish there?)"; return }
+                let clips = o["clips"] as? [[String: Any]] ?? []
+                var t = (o["ok"] as? Bool ?? false) ? "ALL OK" : "PROBLEM"
+                t += ": \(clips.count) clips in \(o["out"] as? String ?? "?")"
+                for c in clips where ((c["verify"] as? [String: Any])?["ok"] as? Bool) != true && !dry { t += "\nPROBLEM shot \(Int(num(c["shot"]))): not verified" }
+                if clips.isEmpty { t += "\nPROBLEM: no kept takes (press KEEP in SHOOT, or use unkept)" }
+                self.finishSummary = t
+            }
+        }
+    }
+
     // MARK: actions
     func toggleRecord() { Task { if recording { await stopRecording() } else { await startRecording() } } }
 

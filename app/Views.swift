@@ -53,6 +53,11 @@ struct ContentView: View {
             topRow
             Divider()
             steps
+            if !shoot.finishSummary.isEmpty {
+                Text(shoot.finishSummary).font(.callout).foregroundStyle(shoot.finishSummary.contains("PROBLEM") ? Color.red : Color.green)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Divider()
             cells
             Divider()
@@ -109,6 +114,8 @@ struct ContentView: View {
             StepButton(n: "3", word: "Analyze", enabled: !s.segs.isEmpty) { s.analyze() }
             Divider().frame(height: 20)
             StepButton(n: "4", word: "SHOOT", enabled: !s.shots.isEmpty) { Shoot.shared.begin() }
+            Divider().frame(height: 20)
+            StepButton(n: "5", word: shoot.finishRunning ? "Finishing..." : "FINISH", enabled: !s.shots.isEmpty && !shoot.finishRunning) { Shoot.shared.finishRun() }
             Spacer(minLength: 0)
         }
         HStack(spacing: 12) {

@@ -708,6 +708,16 @@ final class Store: ObservableObject {
             if o["index"] != nil { let i = Int(num(o["index"])); name = i == 0 ? "" : (WatchScreen.screenNames.indices.contains(i) ? WatchScreen.screenNames[i] : "") }
             UserDefaults.standard.set(name, forKey: "viewScreen")
             return (200, jsonData(WatchScreen.shared.info()))
+        case ("POST", "/finish/run"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if Shoot.shared.finishRunning { return (200, jsonData(["started": false, "running": true])) }
+            Shoot.shared.finishRun(unkept: (o["unkept"] as? Bool) ?? false, dry: (o["dryRun"] as? Bool) ?? false)
+            return (200, jsonData(["started": true]))
+        case ("GET", "/finish/result"):
+            let sh = Shoot.shared
+            var r: [String: Any] = ["running": sh.finishRunning, "summary": sh.finishSummary]
+            if let j = sh.finishJSON { r["result"] = j }
+            return (200, jsonData(r))
         case ("POST", "/takes/delete"):
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
             guard let p = o["path"] as? String else { return (400, jsonData(["error": "send {path, trash?}"])) }
@@ -762,7 +772,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /screen, POST /takes/delete, POST /takes/add, POST /shot, POST /mute, GET /camera, POST /camera, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /finish/run, GET /finish/result, POST /screen, POST /takes/delete, POST /takes/add, POST /shot, POST /mute, GET /camera, POST /camera, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }

@@ -2,7 +2,7 @@
 """secondtake-finish: Second Take, the FINISH half. Deterministic, no LLM, no paid call.
 
     secondtake-finish [--takes FILE] [--analysis FILE] [--out DIR] [--lesson "Lesson 2"] [--lut FILE.cube]
-                      [--unkept] [--dry-run] [--json] [--serve [PORT]]
+                      [--unkept] [--dry-run] [--json]
 
 Per kept take (the last kept one of each shot; --unkept: else its latest take): trim the silence (ffmpeg silencedetect
 -55 dB, 0.15 s before the first speech, 0.3 s after the last), grade only if a real LUT file is given (--lut or
@@ -34,22 +34,36 @@ def has_audio(p):
     return any(s.get("codec_type") == "audio" for s in probe(p).get("streams", []))
 
 
+def noise_floor(p, dur):
+    """mean level (dB) of the first and the last 0.5 s, the louder of the two: the room noise before and after the speech"""
+    lv = []
+    for pre in (["-ss", "0", "-t", "0.5"], ["-sseof", "-0.5"]):
+        r = run(["ffmpeg", "-hide_banner", "-nostats", *pre, "-i", p, "-vn", "-af", "volumedetect", "-f", "null", "-"])
+        m = re.search(r"mean_volume: (-?[\d.]+) dB", r.stderr)
+        if m: lv.append(float(m.group(1)))
+    return max(lv) if lv else None
+
+
 def speech_range(p, dur):
     """(start, end, note): from silencedetect on the audio; no audio or no silence found = whole take."""
     if not has_audio(p):
         return 0.0, dur, "no audio stream: no trim"
-    r = run(["ffmpeg", "-hide_banner", "-nostats", "-i", p, "-vn", "-af", f"silencedetect=n={NOISE}:d=0.1", "-f", "null", "-"])
+    # adaptive: -55 dB, or the room's noise floor + 6 dB when the room is louder than that (so the trim still happens)
+    fl = noise_floor(p, dur)
+    thr = max(-55.0, fl + 6.0) if fl is not None else -55.0
+    r = run(["ffmpeg", "-hide_banner", "-nostats", "-i", p, "-vn", "-af", f"silencedetect=n={thr:.1f}dB:d=0.1", "-f", "null", "-"])
     starts = [float(x) for x in re.findall(r"silence_start: (-?[\d.]+)", r.stderr)]
     ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", r.stderr)]
     s, e, note = 0.0, dur, []
     if starts and starts[0] <= 0.05 and ends:
         s = ends[0]
     elif not starts:
-        note.append("no silence below -55 dB: nothing to trim")
+        note.append(f"no silence below {thr:.0f} dB: nothing to trim")
     if starts and len(starts) > len(ends) or (starts and ends and ends[-1] >= dur - 0.05):
         e = starts[-1]
     if s >= e:
         return 0.0, dur, "no speech found: no trim"
+    if thr > -55.0: note.append(f"room noise {fl:.0f} dB: threshold {thr:.0f} dB")
     return max(0.0, s - PRE), min(dur, e + POST), "; ".join(note)
 
 
@@ -137,21 +151,9 @@ def main():
     ap.add_argument("lesson_pos", nargs="?")
     ap.add_argument("--takes"); ap.add_argument("--analysis"); ap.add_argument("--out"); ap.add_argument("--lesson", default="Lesson 2")
     ap.add_argument("--lut"); ap.add_argument("--unkept", action="store_true"); ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--json", action="store_true"); ap.add_argument("--serve", nargs="?", const=8966, type=int)
+    ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     if a.lesson_pos: a.lesson = a.lesson_pos
-    if a.serve:
-        from http.server import BaseHTTPRequestHandler, HTTPServer
-        class H(BaseHTTPRequestHandler):
-            def do_POST(s):  # POST /finish  body: {"lesson":..,"takes":..,"out":..,"lut":..,"unkept":bool}
-                b = json.loads(s.rfile.read(int(s.headers.get("Content-Length", 0)) or 0) or b"{}")
-                import copy; x = copy.copy(a)
-                for k in ("lesson", "takes", "analysis", "out", "lut", "unkept"):
-                    if k in b: setattr(x, k, b[k])
-                try: body = json.dumps(finish(x)).encode(); c = 200
-                except BaseException as e: body = json.dumps({"error": str(e)}).encode(); c = 500
-                s.send_response(c); s.send_header("Content-Type", "application/json"); s.end_headers(); s.wfile.write(body)
-        HTTPServer(("127.0.0.1", a.serve), H).serve_forever()
     r = finish(a)
     if a.json: print(json.dumps(r, indent=1, ensure_ascii=False))
     else:
