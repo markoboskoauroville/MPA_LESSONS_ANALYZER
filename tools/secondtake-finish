@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""secondtake-finish: Second Take, the FINISH half. Deterministic, no LLM, no paid call.
+
+    secondtake-finish [--takes FILE] [--analysis FILE] [--out DIR] [--lesson "Lesson 2"] [--lut FILE.cube]
+                      [--unkept] [--dry-run] [--json] [--serve [PORT]]
+
+Per kept take (the last kept one of each shot; --unkept: else its latest take): trim the silence (ffmpeg silencedetect
+-55 dB, 0.15 s before the first speech, 0.3 s after the last), grade only if a real LUT file is given (--lut or
+$SECONDTAKE_LUT; his film look is a Resolve Color-page DRX, not a LUT, so otherwise the grade is SKIPPED and said so,
+never invented), export H.265 (hevc_videotoolbox 10 Mbit/s, tag hvc1) + AAC 192k, vertical 1080x1920 .mp4 as
+"Lesson 2 - 5 Hand coordination.mp4", verify with ffprobe, write LESSON_DRAFT.md. Upload and the website are NOT done:
+the draft lists them as waiting for Marko's approval. Engine: ffmpeg (Resolve route not implemented, see TAKEOVER)."""
+import json, os, re, subprocess, sys, glob, argparse, datetime
+
+HOME = os.path.expanduser("~")
+DL = HOME + "/Downloads"
+PRE, POST, NOISE = 0.15, 0.3, "-55dB"
+
+
+def run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def probe(p):
+    r = run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", p])
+    return json.loads(r.stdout or "{}")
+
+
+def duration(p):
+    return float(probe(p).get("format", {}).get("duration", 0))
+
+
+def has_audio(p):
+    return any(s.get("codec_type") == "audio" for s in probe(p).get("streams", []))
+
+
+def speech_range(p, dur):
+    """(start, end, note): from silencedetect on the audio; no audio or no silence found = whole take."""
+    if not has_audio(p):
+        return 0.0, dur, "no audio stream: no trim"
+    r = run(["ffmpeg", "-hide_banner", "-nostats", "-i", p, "-vn", "-af", f"silencedetect=n={NOISE}:d=0.1", "-f", "null", "-"])
+    starts = [float(x) for x in re.findall(r"silence_start: (-?[\d.]+)", r.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", r.stderr)]
+    s, e, note = 0.0, dur, []
+    if starts and starts[0] <= 0.05 and ends:
+        s = ends[0]
+    elif not starts:
+        note.append("no silence below -55 dB: nothing to trim")
+    if starts and len(starts) > len(ends) or (starts and ends and ends[-1] >= dur - 0.05):
+        e = starts[-1]
+    if s >= e:
+        return 0.0, dur, "no speech found: no trim"
+    return max(0.0, s - PRE), min(dur, e + POST), "; ".join(note)
+
+
+def safe(t):
+    t = t.replace("·", "-").replace(":", "-").replace("/", "-")
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def pick_takes(d, shots, unkept):
+    out = []
+    for sh in shots:
+        ts = [t for t in d["takes"] if t["shot"] == sh["n"] and os.path.exists(t["path"])]
+        k = [t for t in ts if t.get("kept")]
+        t = k[-1] if k else (ts[-1] if ts and unkept else None)
+        if t and "(discarded)" not in t.get("note", ""):
+            out.append((sh, t, bool(k)))
+    return out
+
+
+def export(src, dst, s, e, lut):
+    vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
+    if lut:
+        vf += f",lut3d=file='{lut}'"
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", src,
+           "-vf", vf, "-c:v", "hevc_videotoolbox", "-b:v", "10M", "-tag:v", "hvc1", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", dst]
+    return run(cmd)
+
+
+def verify(dst, want):
+    pr = probe(dst)
+    v = next((x for x in pr.get("streams", []) if x["codec_type"] == "video"), {})
+    a = next((x for x in pr.get("streams", []) if x["codec_type"] == "audio"), {})
+    dur = float(pr.get("format", {}).get("duration", 0))
+    peak = None
+    if a:
+        m = re.search(r"max_volume: (-?[\d.]+) dB", run(["ffmpeg", "-hide_banner", "-i", dst, "-vn", "-af", "volumedetect", "-f", "null", "-"]).stderr)
+        peak = float(m.group(1)) if m else None
+    chk = {"hvc1": v.get("codec_tag_string") == "hvc1", "hevc": v.get("codec_name") == "hevc",
+           "1080x1920": (v.get("width"), v.get("height")) == (1080, 1920), "aac": a.get("codec_name") == "aac",
+           "duration": abs(dur - want) < 0.15, "no_clip": peak is None or peak < -0.1,
+           "name": not re.search("[·:]", os.path.basename(dst))}
+    return {"ok": all(chk.values()), "checks": chk, "duration": round(dur, 3), "peak_db": peak}
+
+
+def finish(a):
+    tk = a.takes or (sorted(glob.glob(DL + "/*.takes.json"), key=os.path.getmtime) or [None])[-1]
+    if not tk: sys.exit("no takes file")
+    d = json.load(open(tk))
+    an = a.analysis or DL + "/" + re.sub(r"\.mp4$", "", d.get("video", "")) + ".analysis.json"
+    if not os.path.exists(an):
+        an = (sorted(glob.glob(DL + "/*.analysis.json"), key=os.path.getmtime) or [an])[-1]
+    shots = json.load(open(an))["shots"]
+    out = os.path.expanduser(a.out or HOME + "/Desktop/MPA Lesson 2")
+    lut = a.lut or os.environ.get("SECONDTAKE_LUT")
+    if lut and not os.path.exists(lut): sys.exit("LUT not found: " + lut)
+    grade = f"LUT {lut}" if lut else "SKIPPED: his film look exists only as a DaVinci Resolve Color-page grade (DRX, ElevateMedia/tools/filmlook), not as a LUT; ffmpeg cannot apply it. Grade it in Resolve or give --lut."
+    res = []
+    if not a.dry_run: os.makedirs(out, exist_ok=True)
+    for sh, t, kept in pick_takes(d, shots, a.unkept):
+        name = safe(f"{a.lesson} - {sh['n']} {sh['title']}")
+        src, dst = t["path"], os.path.join(out, name + ".mp4")
+        dur = duration(src)
+        s, e, note = speech_range(src, dur)
+        r = {"shot": sh["n"], "title": sh["title"], "code": sh.get("code", ""), "say": (d.get("edits") or {}).get(str(sh["n"])) or sh.get("say", ""),
+             "take": src, "kept": kept, "take_duration": round(dur, 3), "trim_start": round(s, 3), "trim_end": round(e, 3), "note": note, "file": dst}
+        if not a.dry_run:
+            p = export(src, dst, s, e, lut)
+            r["verify"] = verify(dst, e - s) if p.returncode == 0 and os.path.exists(dst) else {"ok": False, "error": p.stderr[-300:]}
+        res.append(r)
+    draft = out + "/LESSON_DRAFT.md"
+    md = [f"# DRAFT website lesson: {a.lesson} (not published)", "", f"Written {datetime.datetime.now():%d.%m.%Y %H:%M} by secondtake-finish. Source lesson: {d.get('video','')}", "",
+          f"Grade: {grade}", ""]
+    for r in res:
+        md += [f"## {r['shot']} {r['title']}", f"- Video: {r['file']}", f"- Lab code: {r['code'] or 'NO CODE: a new Lab item would have to be created (never edit his items)'}",
+               f"- Say: {r['say']}", f"- Take: {r['take']} ({r['take_duration']} s, trimmed {r['trim_start']} to {r['trim_end']} s){' ' + r['note'] if r['note'] else ''}",
+               f"- Checked: {'OK' if r.get('verify', {}).get('ok') else 'NOT OK or not run'}", ""]
+    md += ["## Waiting for Marko's approval (NOT done)", "1. Watch the clips.", "2. Upload (one approval).", "3. Website lesson page deploy (one approval, after all shots)."]
+    if not a.dry_run: open(draft, "w").write("\n".join(md) + "\n")
+    return {"out": out, "draft": draft, "grade": grade, "clips": res, "ok": bool(res) and all(r.get("verify", {}).get("ok") for r in res) if not a.dry_run else True}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("lesson_pos", nargs="?")
+    ap.add_argument("--takes"); ap.add_argument("--analysis"); ap.add_argument("--out"); ap.add_argument("--lesson", default="Lesson 2")
+    ap.add_argument("--lut"); ap.add_argument("--unkept", action="store_true"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--json", action="store_true"); ap.add_argument("--serve", nargs="?", const=8966, type=int)
+    a = ap.parse_args()
+    if a.lesson_pos: a.lesson = a.lesson_pos
+    if a.serve:
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        class H(BaseHTTPRequestHandler):
+            def do_POST(s):  # POST /finish  body: {"lesson":..,"takes":..,"out":..,"lut":..,"unkept":bool}
+                b = json.loads(s.rfile.read(int(s.headers.get("Content-Length", 0)) or 0) or b"{}")
+                import copy; x = copy.copy(a)
+                for k in ("lesson", "takes", "analysis", "out", "lut", "unkept"):
+                    if k in b: setattr(x, k, b[k])
+                try: body = json.dumps(finish(x)).encode(); c = 200
+                except BaseException as e: body = json.dumps({"error": str(e)}).encode(); c = 500
+                s.send_response(c); s.send_header("Content-Type", "application/json"); s.end_headers(); s.wfile.write(body)
+        HTTPServer(("127.0.0.1", a.serve), H).serve_forever()
+    r = finish(a)
+    if a.json: print(json.dumps(r, indent=1, ensure_ascii=False))
+    else:
+        print("grade:", r["grade"])
+        for c in r["clips"]:
+            print(f"shot {c['shot']}: {c['take_duration']}s -> {c['trim_start']}..{c['trim_end']}  {os.path.basename(c['file'])}  {c.get('verify',{}).get('ok')} {c['note']}")
+        print("draft:", r["draft"], "| ALL OK" if r["ok"] else "| PROBLEM")
+    sys.exit(0 if r["ok"] else 1)
+
+
+if __name__ == "__main__":
+    main()
