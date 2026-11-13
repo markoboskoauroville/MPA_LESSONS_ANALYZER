@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Second Take rehearsal test (13.11.2026). Runs without Claude, costs nothing: no cloud, no vision.
+Drives the Mac app (API 127.0.0.1:8965, LAN :8966) and the Android remote (adb taps found by uiautomator text),
+verifies every take file with ffprobe/ffmpeg, prints PASS/FAIL/SKIP per step, deletes its own takes at the end.
+
+  rehearsal_test                    quick: 4 shots (3..6), 4 s takes, take 2 on shot 3, lock test, checks
+  rehearsal_test --secs 8 --shots 3,4,5,6
+  rehearsal_test --long 190         add a long take (seconds) on the last shot
+  rehearsal_test --camera-loss      stop OBS virtual camera mid-take and see what the app does
+  rehearsal_test --restart          quit and reopen the Mac app, check lesson + remote reconnect
+  rehearsal_test --no-phone         drive by API only (no adb)
+Environment: PHONE=100.67.149.40:5555  MAC_LAN=10.146.4.41  OBS=1 (switch OBS to the SecondTakeMock scene collection,
+start the virtual camera, point Second Take at OBS Virtual Camera + BlackHole 2ch, restore afterwards; OBS=0 to use the camera as it is).
+Exit code 0 only when nothing FAILed. Output ends with a line 'RESULT: n pass, m fail, k skip'."""
+import json, os, subprocess, sys, time, urllib.request, urllib.error, re, argparse, shutil, xml.etree.ElementTree as ET
+
+API = "http://127.0.0.1:8965"
+PHONE = os.environ.get("PHONE", "100.67.149.40:5555")
+LAN = None   # ip:port of the Mac listener for other remotes, found in main()
+OBSWS = os.path.expanduser("~/Developer/claude-code/tools/obsws.py")
+MOCK_COLLECTION = "SecondTakeMock"
+res = {"PASS": 0, "FAIL": 0, "SKIP": 0}
+fails = []
+
+WHO = os.environ.get("REHEARSAL_WHO", "MACRO").upper()      # QUEEN / MACRO / CLAUDE
+TIMINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rehearsal_timings.json")
+try: timings = json.load(open(TIMINGS))
+except Exception: timings = {}
+before = set(); new_takes = []
+plan = []; phase_i = 0; phase_t0 = 0.0; phase_name = ""; phase_fail = None; bar_on = False
+
+class Stopped(Exception): pass
+
+BAR = os.environ.get("REHEARSAL_BAR", "1") != "0"      # REHEARSAL_BAR=0: no Mac lock bar (when another session also uses Macro Recorder)
+
+def bar(text, secs):
+    global bar_on
+    if not BAR: return
+    subprocess.run(["macro", "lock", text, str(max(5, int(secs)))], capture_output=True, timeout=20); bar_on = True
+
+def overridden():
+    if not BAR: return False
+    try:
+        r = subprocess.run(["macro", "lock-status"], capture_output=True, text=True, timeout=10).stdout
+        return "overridden" in r
+    except Exception: return False
+
+def left(from_i):
+    return sum(timings.get(n, 25) for n in plan[from_i:])
+
+def phase(name):
+    """next numbered step: updates the bottom bar, stores the last step's timing, stops when Marko pressed TAKE OVER"""
+    global phase_i, phase_t0, phase_name
+    if phase_name: timings[phase_name] = round(time.time() - phase_t0, 1)
+    if overridden(): raise Stopped()
+    phase_i += 1; phase_name = name; phase_t0 = time.time()
+    print(f"=== step {phase_i}/{len(plan)}: {name}", flush=True)
+    bar(f"{WHO} · Second Take test · step {phase_i}/{len(plan)} · {name}", left(phase_i - 1))
+
+def say(kind, step, why=""):
+    global phase_fail
+    res[kind] += 1
+    if kind == "FAIL":
+        fails.append(step)
+        if phase_fail is None: phase_fail = (phase_i, phase_name)
+    print(f"{kind:4}  {step}" + (f"  -- {why}" if why else ""), flush=True)
+
+def check(ok, step, why=""):
+    say("PASS" if ok else "FAIL", step, why if not ok else (why or ""))
+    return ok
+
+def http(method, path, body=None, headers=None, base=API, timeout=15):
+    data = json.dumps(body if body is not None else {}).encode() if method == "POST" else None
+    req = urllib.request.Request(base + path, data=data, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            code = r.status
+    except urllib.error.HTTPError as e:
+        raw = e.read(); code = e.code
+    except Exception as e:
+        return 0, {"error": str(e)}
+    try: return code, json.loads(raw)
+    except Exception: return code, {"raw": raw[:200].decode("utf8", "replace")}
+
+def status(): return http("GET", "/status")[1]
+
+def wait_mode(mode, secs=12):
+    t = time.time()
+    while time.time() - t < secs:
+        s = status()
+        if s.get("mode") == mode: return True
+        time.sleep(0.4)
+    return False
+
+def sh(cmd, timeout=60):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout
+
+def find_lan():
+    ip = os.environ.get("MAC_LAN") or (sh("ipconfig getifaddr en0").strip() or sh("ipconfig getifaddr en1").strip() or "127.0.0.1")
+    port = os.environ.get("MAC_LAN_PORT")
+    if not port:   # normally 8966; the app takes the next port when something else holds it
+        out = sh("lsof -nP -iTCP -sTCP:LISTEN | grep MPALes")
+        ports = [p for p in re.findall(r":(\d+) \(LISTEN\)", out) if p != "8965"]
+        port = ports[0] if ports else "8966"
+    return f"{ip}:{port}"
+
+# ---------- phone (adb) ----------
+class Phone:
+    def __init__(self):
+        self.ok = False
+    def adb(self, cmd, timeout=30): return sh(f"adb -s {PHONE} {cmd}", timeout)
+    def connect(self):
+        out = sh("adb devices")
+        self.ok = PHONE in out and "device" in out.split(PHONE)[1][:12]
+        return self.ok
+    def lock(self, text, secs=900):
+        sh(f"curl -s -m3 -X POST 127.0.0.1:8720/lock -d '{json.dumps({'text': text, 'seconds': secs})}'")
+    def unlock(self): sh("curl -s -m3 -X POST 127.0.0.1:8720/unlock")
+    def through(self): sh("curl -s -m3 -X POST 127.0.0.1:8720/through -d '{\"ms\":900}'")
+    def ui(self):
+        self.through()
+        self.adb("shell timeout 8 uiautomator dump /sdcard/st_ui.xml >/dev/null", 14)
+        x = self.adb("shell cat /sdcard/st_ui.xml")
+        try: return ET.fromstring(x)
+        except Exception: return None
+    def texts(self):
+        r = self.ui(); out = []
+        if r is None: return out
+        for n in r.iter("node"):
+            t = n.get("text")
+            if t: out.append(t)
+        return out
+    # the remote's screen animates all the time, so uiautomator cannot dump it ("could not get idle state"):
+    # buttons are tapped by their place (fractions of the portrait screen, measured on the Nothing A142 and the Pixel 7 layout)
+    POS = {"SHOTS": (.5, .630), "WATCH": (.27, .699), "LIVE": (.73, .699), "RECORD": (.5, .796), "STOP": (.5, .796),
+           "AGAIN": (.27, .894), "NEXT": (.73, .894)}
+    def portrait(self):
+        self.adb("shell settings put system accelerometer_rotation 0"); self.adb("shell settings put system user_rotation 0")
+        m = re.search(r"(\d+)x(\d+)", self.adb("shell wm size")); self.w, self.h = int(m.group(1)), int(m.group(2))
+    def tap_text(self, label, exact=True):
+        if label in self.POS:
+            fx, fy = self.POS[label]; self.through(); self.adb(f"shell input tap {int(fx*self.w)} {int(fy*self.h)}"); return True
+        r = self.ui()
+        if r is None: return False
+        for n in r.iter("node"):
+            t = (n.get("text") or "")
+            if (t.strip().upper() == label) if exact else (label in t.upper()):
+                m = re.findall(r"\d+", n.get("bounds"))
+                x = (int(m[0]) + int(m[2])) // 2; y = (int(m[1]) + int(m[3])) // 2
+                self.through(); self.adb(f"shell input tap {x} {y}")
+                return True
+        return False
+    def shot(self, name, outdir):
+        if not outdir: return
+        self.through()
+        os.makedirs(outdir, exist_ok=True)
+        raw = os.path.join(outdir, "_raw.png")
+        with open(raw, "wb") as f:
+            f.write(subprocess.run(["adb", "-s", PHONE, "exec-out", "screencap", "-p"], capture_output=True).stdout)
+        subprocess.run(["sips", "-Z", "1400", "-s", "format", "jpeg", raw, "--out", os.path.join(outdir, f"{name}.jpg")], capture_output=True)
+        os.remove(raw)
+
+phone = Phone()
+USE_PHONE = True
+def press(label, outdir=None):
+    """phone button, or the same through the API when no phone"""
+    if USE_PHONE:
+        return phone.tap_text(label)
+    m = {"WATCH": ("POST", "/watch"), "LIVE": ("POST", "/live"), "RECORD": ("POST", "/record"), "STOP": ("POST", "/stop"),
+         "AGAIN": ("POST", "/again"), "NEXT": ("POST", "/next")}[label]
+    return http(*m)[0] == 200
+
+# ---------- file verification ----------
+def verify_take(path, rec_secs, tol=2.5, expect=(1080, 1920)):
+    name = os.path.basename(path)
+    if not check(os.path.exists(path), f"file exists: {name}"): return
+    p = json.loads(sh(f'ffprobe -v error -print_format json -show_streams -show_format "{path}"') or "{}")
+    v = next((s for s in p.get("streams", []) if s["codec_type"] == "video"), None)
+    a = next((s for s in p.get("streams", []) if s["codec_type"] == "audio"), None)
+    dur = float(p.get("format", {}).get("duration", 0))
+    check(abs(dur - rec_secs) <= tol, f"duration {dur:.1f}s is about the record time {rec_secs:.1f}s ({name})", f"diff {dur-rec_secs:+.1f}")
+    if v:
+        check((v["width"], v["height"]) == expect, f"video {v['width']}x{v['height']} {v['codec_name']} {v.get('avg_frame_rate')}", f"expected {expect}")
+        check(v["codec_name"] in ("hevc", "h264", "prores"), "video codec is hevc/h264/prores")
+    else: check(False, "video stream present")
+    if not check(a is not None, "audio stream present"): return
+    # audio level
+    out = subprocess.run(["ffmpeg", "-nostats", "-i", path, "-vn", "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+    mm = re.search(r"mean_volume: (-?[\d.]+|-inf) dB", out); mx = re.search(r"max_volume: (-?[\d.]+|-inf) dB", out)
+    mean = float(mm.group(1)) if mm and mm.group(1) != "-inf" else -99
+    check(mean > float(os.environ.get("AUDIO_MIN", "-55")), f"audio level mean {mean:.0f} dB (not silent)", f"max {mx.group(1) if mx else '?'} dB")
+    # frame continuity: packet timestamps, count vs duration, freeze detect
+    fr = sh(f'ffprobe -v error -select_streams v:0 -show_entries packet=pts_time -of csv=p=0 "{path}"').split()
+    ts = sorted(float(x) for x in fr if re.match(r"^[\d.]+$", x))
+    if len(ts) > 3:
+        deltas = [b - a for a, b in zip(ts, ts[1:])][1:]      # the first step is the camera's start-up (one frame at 0, next about 0.12 s)
+        med = sorted(deltas)[len(deltas) // 2]
+        gaps = [d for d in deltas if d > med * 1.6]
+        check(not gaps, f"frame timing steady: {len(ts)} frames, median {med*1000:.1f} ms, gaps over 1.6x: {len(gaps)}",
+              f"largest gap {max(gaps)*1000:.0f} ms" if gaps else "")
+        check(abs(len(ts) - dur / med) <= max(3, 0.03 * len(ts)), f"frame count {len(ts)} matches duration x fps")
+    if os.environ.get("FREEZE", "1") == "0":
+        say("SKIP", "frozen-picture scan", "FREEZE=0: a static room is judged by timestamps and frame count only"); return
+    fz = subprocess.run(["ffmpeg", "-nostats", "-i", path, "-an", "-vf", "freezedetect=n=-60dB:d=1.0", "-f", "null", "-"], capture_output=True, text=True).stderr
+    frozen = re.findall(r"freeze_duration: ([\d.]+)", fz)
+    check(not frozen, "no frozen picture (>1 s identical frames)", f"frozen {frozen}" if frozen else "")
+
+# ---------- OBS ----------
+def obs(*a):
+    return sh(f'python3 "{OBSWS}" ' + " ".join(f"'{x}'" for x in a), 30)
+
+saved_cam = None
+def setup_obs():
+    global saved_cam
+    if os.environ.get("OBS", "1") == "0": return
+    if "OBS" not in sh("pgrep -l OBS"): sh("open -g -a OBS"); time.sleep(8)
+    cur = obs("GetSceneCollectionList", "{}")
+    m = re.search(r'"currentSceneCollectionName": "([^"]+)"', cur)
+    cur_coll = m.group(1) if m else None
+    if cur_coll == MOCK_COLLECTION: cur_coll = os.environ.get("RESTORE_COLLECTION", "SHOWREEL")   # left on the mock by an earlier run
+    saved_cam = {"collection": cur_coll}
+    obs("SetCurrentSceneCollection", json.dumps({"sceneCollectionName": MOCK_COLLECTION})); time.sleep(4)
+    obs("StartVirtualCam", "{}"); time.sleep(2)
+    c = http("GET", "/camera")[1]
+    saved_cam.update(cam=c.get("wantedCamera"), mic=c.get("wantedMic"))
+    http("POST", "/camera", {"name": "OBS Virtual Camera", "mic": "BlackHole 2ch"})
+    check("true" in obs("GetVirtualCamStatus", "{}").lower(), "OBS virtual camera running (mock scene + motion layer)")
+
+def teardown_obs():
+    if not saved_cam: return
+    obs("StopVirtualCam", "{}")
+    if saved_cam.get("collection") and saved_cam["collection"] != MOCK_COLLECTION:
+        obs("SetCurrentSceneCollection", json.dumps({"sceneCollectionName": saved_cam["collection"]}))
+    http("POST", "/camera", {"name": saved_cam.get("cam") or "ILCE", "mic": saved_cam.get("mic") or ""})
+    http("POST", "/live", {"on": False})
+    # make the camera session switch back
+    http("POST", "/live", {}); time.sleep(3); http("POST", "/live", {"on": False})
+
+# ---------- main ----------
+def main():
+    global USE_PHONE, LAN
+    LAN = find_lan()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--shots", default="3,4,5,6"); ap.add_argument("--secs", type=float, default=4)
+    ap.add_argument("--long", type=float, default=0); ap.add_argument("--camera-loss", action="store_true")
+    ap.add_argument("--restart", action="store_true"); ap.add_argument("--no-phone", action="store_true")
+    ap.add_argument("--shots-dir", default=os.environ.get("SHOTS_DIR", ""))
+    a = ap.parse_args()
+    shots = [int(x) for x in a.shots.split(",")]
+    plan[:] = ["start phone and Mac", "first-come lock", "OBS camera"] + [f"shot {n}" for n in shots] + (["restart the Mac app"] if a.restart else []) + ["cleanup"]
+    phase(plan[0])
+    USE_PHONE = not a.no_phone and phone.connect()
+    if not a.no_phone and not USE_PHONE: say("SKIP", "phone", f"{PHONE} not in adb devices; driving by API")
+
+    s = status()
+    if not check(s.get("protocol") == 1, "app answers /status", f"version {s.get('version')}"): return finish()
+    print(f"      app v{s.get('version')}, lesson {os.path.basename(s.get('video',''))}, mode {s.get('mode')}")
+    check(s.get("mode") in ("idle", "live"), "starts idle")
+    free = shutil.disk_usage(os.path.expanduser("~/Movies")).free / 1e9
+    need = (a.secs * len(shots) * 2 + a.long) * 0.0025
+    check(free > max(20, need), f"disk space {free:.0f} GB free in ~/Movies", f"need > {max(20, need):.0f}")
+    shots_list = http("GET", "/shots")[1].get("shots", [])
+    check(len(shots_list) >= max(shots), f"shot list has {len(shots_list)} shots")
+    before.update(t["path"] for t in http("GET", "/takes")[1].get("takes", []))
+
+    if USE_PHONE:
+        phone.lock(f"{WHO}: rehearsal test"); phone.portrait()
+        sh(f"adb -s {PHONE} shell input keyevent KEYCODE_WAKEUP")
+        sh(f"adb -s {PHONE} shell am start -n community.auroville.secondtake.remote/.MainActivity"); time.sleep(5)
+        t = phone.texts()
+        if any("Which Mac" in x for x in t):
+            say("PASS", "phone found the Mac by itself (Bonjour list shown)", f"entries: {[x for x in t if 'MPA' in x or 'Second' in x]}")
+            names = [x for x in t if "MPA" in x or "Second" in x]
+            check(len(names) == len(set(names)), "list has no duplicate names", f"{names}")
+            phone.tap_text(names[0] if names else "", exact=True); time.sleep(3)
+        time.sleep(2); phone.shot("st_10_phone_connected", a.shots_dir)
+        t = phone.texts()
+        if t: check("MUTE" in " ".join(t).upper(), "phone has a MUTE / UNMUTE control", "no such button on the phone")
+        else: say("SKIP", "phone text checks", "uiautomator cannot dump the remote (screen never idle); look at the screenshots")
+        c = http("GET", "/status", headers={"X-Remote-Id": "rehearsal-probe"}, base=f"http://{LAN}")[0]
+        check(c in (200, 423), "Mac listener answers on the LAN while the phone is on", str(c))
+        check(status().get("controller", "x") != "x", "status carries a controller field")
+
+    phase("first-come lock")
+    h1 = {"X-Remote-Id": "rehearsal-A", "X-Remote-Name": "TestA"}; h2 = {"X-Remote-Id": "rehearsal-B", "X-Remote-Name": "TestB"}
+    c1, _ = http("GET", "/status", headers=h1, base=f"http://{LAN}")
+    if c1 == 423:
+        say("SKIP", "first-come lock", "the phone owns the guide right now; testing second remote only")
+        c2, b2 = http("GET", "/status", headers=h2, base=f"http://{LAN}")
+        check(c2 == 423 and b2.get("busy"), "second remote gets 423 busy while the phone owns it", f"{c2} {b2}")
+    else:
+        c2, b2 = http("GET", "/status", headers=h2, base=f"http://{LAN}")
+        check(c1 == 200 and c2 == 423 and b2.get("busy"), "first-come lock: B gets 423 while A owns", f"A {c1}, B {c2}")
+
+    phase("OBS camera"); setup_obs()
+    for i, n in enumerate(shots):
+        phase(f"shot {n}")
+        cur = status().get("shot")
+        guard = 0
+        while cur != n and guard < 12:           # reach the shot by NEXT (like Marko), SHOTS list as the fallback
+            if cur is not None and cur < n:
+                press("NEXT"); time.sleep(1.5)
+            else:
+                http("POST", "/shot", {"n": n}); time.sleep(1)
+            cur = status().get("shot"); guard += 1
+        check(status().get("shot") == n, f"shot {n} is current")
+        if USE_PHONE:
+            t = phone.texts()
+            if any(shots_list[n-1]["title"] in x for x in t): say("PASS", "phone shows the shot title (found by uiautomator)")
+            else: say("SKIP", "phone shot title", "uiautomator dump is partial; see the screenshots st_11_*")
+        press("WATCH"); ok = wait_mode("watch")
+        check(ok, f"WATCH -> mode watch"); time.sleep(2)
+        st = status(); check(st.get("muted") is True, "clip starts muted")
+        phone.shot(f"st_11_shot{n}_watch", a.shots_dir) if USE_PHONE else None
+        if i == 0:
+            http("POST", "/mute", {"on": False}); time.sleep(1); check(status().get("muted") is False, "MUTE toggle (API) unmutes")
+            http("POST", "/mute", {"on": True})
+        press("LIVE"); check(wait_mode("live"), "LIVE -> mode live"); time.sleep(2)
+        cam = http("GET", "/camera")[1]; f1 = cam.get("frames", 0); time.sleep(1.5); f2 = http("GET", "/camera")[1].get("frames", 0)
+        check(f2 - f1 > 10, f"camera delivers frames in live ({f2-f1} in 1.5 s, {cam.get('camera')})")
+        if os.environ.get("WANT_CAMERA"): check(os.environ["WANT_CAMERA"].lower() in (cam.get("camera") or "").lower(), f"camera in use is {cam.get('camera')} (wanted {os.environ['WANT_CAMERA']})")
+        if a.shots_dir and i == 0:
+            raw = os.path.join(a.shots_dir, "_benq.png"); subprocess.run(["screencapture", "-x", "-D", "1", raw]); subprocess.run(["sips", "-Z", "1500", "-s", "format", "jpeg", raw, "--out", os.path.join(a.shots_dir, "st_15_live_benq.jpg")], capture_output=True); os.remove(raw)
+        for take in (1, 2) if i == 0 else (1,):
+            t0 = time.time(); press("RECORD")
+            ok = wait_mode("recording", 20); check(ok, f"RECORD -> mode recording (take {take})")
+            time.sleep(a.secs if not (a.long and i == len(shots) - 1 and take == 1) else a.long)
+            if a.camera_loss and i == 1 and take == 1:
+                print("      camera-loss: stopping the OBS virtual camera mid-take"); obs("StopVirtualCam", "{}"); time.sleep(4)
+                s2 = status(); print(f"      after loss: mode {s2.get('mode')} error {s2.get('error')!r}")
+                check(s2.get("mode") == "recording" or True, "camera loss observed", f"mode {s2.get('mode')}, error {s2.get('error')!r}")
+                obs("StartVirtualCam", "{}"); time.sleep(3)
+            if USE_PHONE:
+                phone.shot(f"st_12_shot{n}_rec", a.shots_dir)
+            rec_secs = float(status().get('recElapsed') or 0); tk = time.time(); press("STOP"); wait_mode("idle", 15)
+            time.sleep(3)
+            now = http("GET", "/takes")[1].get("takes", [])
+            fresh = [t for t in now if t["path"] not in before and t["path"] not in new_takes]
+            if not check(len(fresh) == 1, f"STOP -> exactly one new take in takes.json (shot {n} take {take})", f"{len(fresh)} new"): continue
+            tkn = fresh[0]; new_takes.append(tkn["path"])
+            check(tkn.get("shot") == n, "take is filed under the right shot")
+            verify_take(tkn["path"], rec_secs + 0.7, tol=2.5)
+            if USE_PHONE:
+                phone.shot(f"st_13_shot{n}_take{take}_done", a.shots_dir)
+            if i == 0 and take == 1:
+                before_again = len(http("GET", "/takes")[1].get("takes", []))
+                press("AGAIN"); time.sleep(2)
+                s3 = status()
+                check(s3.get("mode") != "recording", "AGAIN readies take 2 without recording", f"mode {s3.get('mode')}")
+                n_after = len(http("GET", "/takes")[1].get("takes", []))
+                check(n_after in (before_again, before_again - 1), "AGAIN adds no take (it may mark the last take discarded: -1)", f"takes {before_again} -> {n_after}")
+    # restart
+    if a.restart:
+        phase("restart the Mac app")
+        sh("osascript -e 'tell application \"MPA Lessons Analyzer (Mantra)\" to quit'"); time.sleep(4)
+        if USE_PHONE:
+            t = phone.texts(); phone.shot("st_13_mac_down", a.shots_dir)
+            check(any("NO ANSWER" in x.upper() or "OFFLINE" in x.upper() or "LOOKING" in x.upper() for x in t), "phone shows offline/searching while the Mac app is down", str(t[:5]))
+        sh("open -g '/Applications/MPA Lessons Analyzer (Mantra).app'")
+        t0 = time.time(); back = False
+        while time.time() - t0 < 40:
+            if status().get("protocol") == 1: back = True; break
+            time.sleep(1)
+        check(back, "Mac app is back and answers", f"after {time.time()-t0:.0f} s")
+        s = status(); check(bool(s.get("video")) and s.get("shots", 0) > 0, "app reopened the lesson by itself", s.get("video", "")[-40:])
+        takes_after = {t["path"] for t in http("GET", "/takes")[1].get("takes", [])}
+        check(all(p in takes_after for p in new_takes), "takes.json survived the restart")
+        if USE_PHONE:
+            time.sleep(15); t = phone.texts(); phone.shot("st_14_phone_reconnected", a.shots_dir)
+            check(any(x in ("IDLE", "LIVE", "WATCH") for x in t), "phone reconnected by itself within 15 s", str(t[:5]))
+    cleanup()
+    return finish()
+
+def cleanup(quiet=False):
+    if not quiet: phase("cleanup")
+    http("POST", "/stop"); http("POST", "/live", {"on": False})
+    for p in new_takes:
+        c, b = http("POST", "/takes/delete", {"path": p})
+        if c != 200: print("      could not delete via API:", p, c)
+        if os.path.exists(p): os.remove(p)
+    now = {t["path"] for t in http("GET", "/takes")[1].get("takes", [])}
+    check(now == before, "takes.json is back to what it was before the test", f"extra: {now-before}")
+    teardown_obs()
+    if USE_PHONE:
+        phone.unlock()
+        sh(f"adb -s {PHONE} shell monkey -p com.anthropic.claude -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1")
+
+def finish(stopped=False):
+    global bar_on
+    if phase_name: timings[phase_name] = round(time.time() - phase_t0, 1)
+    try: json.dump(timings, open(TIMINGS, "w"), indent=1)
+    except Exception: pass
+    total = res["PASS"] + res["FAIL"]
+    if stopped: final = f"{WHO} · Second Take test · stopped by Marko at step {phase_i}/{len(plan)}"
+    elif res["FAIL"]: final = f"{WHO} · Second Take test · FAIL at step {phase_fail[0] if phase_fail else phase_i}/{len(plan)} ({phase_fail[1] if phase_fail else ''})"
+    else: final = f"{WHO} · Second Take test · PASS {res['PASS']}/{total}"
+    if bar_on and not stopped:
+        bar(final, 10); time.sleep(10)
+    if bar_on and not stopped: subprocess.run(["macro", "unlock"], capture_output=True)
+    print("STOPPED by Marko" if stopped else "")
+    print(f"RESULT: {res['PASS']} pass, {res['FAIL']} fail, {res['SKIP']} skip" + (f"  FAILED: {'; '.join(fails)}" if fails else ""))
+    sys.exit(2 if stopped else (1 if res["FAIL"] else 0))
+
+def on_term(*_): raise KeyboardInterrupt()
+
+if __name__ == "__main__":
+    import signal
+    signal.signal(signal.SIGTERM, on_term)
+    try: main()
+    except Stopped:
+        # Marko pressed TAKE OVER: put everything we touched back, quietly, and say so
+        print("stopped by Marko (TAKE OVER)")
+        try: cleanup(quiet=True)
+        except BaseException: pass
+        finish(stopped=True)
+    except KeyboardInterrupt:
+        print("interrupted"); fails.append("interrupted"); res["FAIL"] += 1
+        try: cleanup(quiet=True)
+        except BaseException: pass
+        finish()
