@@ -579,7 +579,6 @@ final class Store: ObservableObject {
         http.start(8965)
         lan.lan = true
         lan.bonjour = "_secondtake._tcp"
-        lan.auth = { code in await MainActor.run { Pairing.shared.check(code) } }
         lan.handler = { method, path, body, isLan in
             await MainActor.run { Store.shared.route(method, path, body, lan: isLan) }
         }

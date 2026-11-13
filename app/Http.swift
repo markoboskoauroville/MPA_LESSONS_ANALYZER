@@ -5,10 +5,9 @@ import Network
 final class Http: @unchecked Sendable {
     var onReady: ((UInt16) -> Void)?
     var handler: ((String, String, Data, Bool) async -> (Int, Data))?
-    /// LAN listener (all interfaces, Bonjour): every call needs a paired code in X-Pair-Code
+    /// LAN listener (all interfaces, Bonjour): only private local networks and Tailscale may call, and only the protocol's shooting actions
     var lan = false
     var bonjour: String?
-    var auth: ((String?) async -> Bool)?
     private var listener: NWListener?
 
     func start(_ p: UInt16, tries: Int = 16) {
@@ -31,6 +30,29 @@ final class Http: @unchecked Sendable {
         } catch { start(p + 1, tries: tries - 1) }
     }
 
+    /// loopback, 10/8, 172.16/12, 192.168/16, link-local, Tailscale 100.64/10 (and fd7a:115c:a1e0::/48), nothing else
+    static func sourceOK(_ c: NWConnection) -> Bool {
+        guard case let .hostPort(host, _) = c.endpoint else { return false }
+        switch host {
+        case .ipv4(let a): return v4OK(Array(a.rawValue))
+        case .ipv6(let a):
+            let b = Array(a.rawValue)
+            if b.count == 16 {
+                if b[0..<10].allSatisfy({ $0 == 0 }) && b[10] == 0xff && b[11] == 0xff { return v4OK(Array(b[12..<16])) }   // ::ffff:a.b.c.d
+                if b[0..<15].allSatisfy({ $0 == 0 }) && b[15] == 1 { return true }                                   // ::1
+                if b[0] == 0xfe && (b[1] & 0xc0) == 0x80 { return true }                                              // fe80::/10
+                if (b[0] & 0xfe) == 0xfc { return true }                                                              // fc00::/7 (includes Tailscale fd7a:...)
+            }
+            return false
+        default: return false
+        }
+    }
+    private static func v4OK(_ b: [UInt8]) -> Bool {
+        guard b.count == 4 else { return false }
+        return b[0] == 127 || b[0] == 10 || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
+            || (b[0] == 169 && b[1] == 254) || (b[0] == 100 && (64...127).contains(b[1]))
+    }
+
     private func serve(_ c: NWConnection) {
         c.start(queue: .global())
         receive(c, Data())
@@ -43,8 +65,10 @@ final class Http: @unchecked Sendable {
             if let d = data { buf.append(d) }
             if let (m, p, body, code0) = Http.parse(buf) {
                 Task {
-                    if self.lan, !(await self.auth?(code0) ?? false) {
-                        Http.send(c, 401, Data("{\"error\":\"pair: a code is shown on the Mac screen; send it in X-Pair-Code\"}".utf8)); return
+                    if self.lan {
+                        guard Http.sourceOK(c) else { c.cancel(); return }
+                        let ok: Set<String> = ["GET /status", "GET /shots", "POST /watch", "POST /live", "POST /record", "POST /stop", "POST /next", "POST /again", "POST /shot", "POST /mute"]
+                        guard ok.contains("\(m) \(p)") else { Http.send(c, 404, Data("{\"error\":\"not part of the Second Take protocol\"}".utf8)); return }
                     }
                     let (code, out) = await self.handler?(m, p, body, self.lan) ?? (500, Data())
                     Http.send(c, code, out)

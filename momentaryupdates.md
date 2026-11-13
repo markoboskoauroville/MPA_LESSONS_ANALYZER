@@ -36,3 +36,7 @@ Marko: "this player for second take is just jumping up and playing audio while y
 Marko: "There is no need to run a web recorder. You need to copy paste the code from web recorder to this app so it's built in. So when user downloads this, they have everything ... webcam is the thing which is built in the whole system of second take"
 Marko (name): "second take is great. Name. Let's do it"
 **Status:** v8: clips start muted (MUTE/UNMUTE in the full-screen group, POST /mute, ducked while :8837 /speaking plays); camera, slice and recorder built in (Camera.swift, Recorder.swift, Slicer.swift copied from Webcam Recorder), live picture and take on the BenQ; the Second Take protocol (PROTOCOL.md of SECOND_TAKE_REMOTE): LAN listener :8966 with Bonjour _secondtake._tcp, pairing code shown full screen, X-Pair-Code; last video reopened at start.
+
+## 13.11.2026: no pairing
+Marko: "I don't need this workflow to type codes remove it. No typing of any codes, please. Remote controller know how to speak with an app and that's it ... let's just forget this security thing. Let's make it work without any code exchanges"
+**Status:** v11: no code, no X-Pair-Code, nothing on the BenQ; Bonjour _secondtake._tcp; the LAN listener (:8966) accepts only private/Tailscale source addresses and only the protocol's shooting actions; loopback :8965 stays the full local API.
