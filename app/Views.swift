@@ -189,6 +189,7 @@ struct RowView: View {
 struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @AppStorage("exportFolder") private var exportFolder = (NSHomeDirectory() + "/Desktop")
+    @AppStorage("voiceToTextPort") private var vtPort = 0
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -208,6 +209,11 @@ struct SettingsView: View {
                 Button("Desktop") { exportFolder = NSHomeDirectory() + "/Desktop" }
             }
             Text("Finished lesson videos will be exported here by later versions.").font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            Text("VOICE TO TEXT (MANTRA) PORT").font(.system(size: 10)).foregroundStyle(.secondary)
+            TextField("0 = find it automatically", value: $vtPort, format: .number.grouping(.never)).frame(width: 140)
+            Text("Step 2 sends the video to Voice to Text (Mantra)'s local API.").font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             Divider()

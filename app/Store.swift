@@ -69,7 +69,7 @@ final class Store: ObservableObject {
         guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let arr = o["segments"] as? [[String: Any]] else { return }
         segs = arr.enumerated().map { Seg(id: $0.offset, start: num($0.element["start"]), end: num($0.element["end"]), text: $0.element["text"] as? String ?? "") }
-        lang = o["lang"] as? String ?? ""
+        lang = o["language"] as? String ?? o["lang"] as? String ?? ""
     }
 
     func rebuild() { items = buildItems(segs, analysis) }
@@ -126,79 +126,85 @@ final class Store: ObservableObject {
         }
     }
 
-    private func runTranscription(_ url: URL) async throws {
-        phase = "Extracting audio (ffmpeg)"
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MPA Lessons Analyzer (Mantra)")
-        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
-        let wav = caches.appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".wav")
-        try await Self.ffmpeg(["-y", "-loglevel", "error", "-i", url.path, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav.path])
-        try Task.checkCancellation()
-        phase = "Splitting audio into 300 s chunks"
-        let chunkDir = caches.appendingPathComponent("chunks")
-        try? FileManager.default.removeItem(at: chunkDir)
-        try FileManager.default.createDirectory(at: chunkDir, withIntermediateDirectories: true)
-        try await Self.ffmpeg(["-y", "-loglevel", "error", "-i", wav.path, "-f", "segment", "-segment_time", "300", "-c", "copy", "-reset_timestamps", "1", chunkDir.appendingPathComponent("c_%04d.wav").path])
-        let chunks = try FileManager.default.contentsOfDirectory(atPath: chunkDir.path).filter { $0.hasSuffix(".wav") }.sorted()
-        guard !chunks.isEmpty else { throw NSError(domain: "mpa", code: 4, userInfo: [NSLocalizedDescriptionKey: "No audio chunks were made"]) }
-        let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 1800
-        cfg.timeoutIntervalForResource = 3600
-        let session = URLSession(configuration: cfg)
-        var allWords: [[String: Any]] = []
-        var fallback: [Seg] = []
-        var fullText: [String] = []
-        var l = ""
-        for (i, name) in chunks.enumerated() {
-            try Task.checkCancellation()
-            phase = "Transcribing chunk \(i + 1) / \(chunks.count) (local Whisper)"
-            let off = Double(i) * 300
-            var req = URLRequest(url: URL(string: "http://127.0.0.1:8837/hear?lang=auto&words=1")!)
-            req.httpMethod = "POST"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: ["path": chunkDir.appendingPathComponent(name).path])
-            req.timeoutInterval = 1800
-            let (data, _) = try await session.data(for: req)
-            guard let o = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NSError(domain: "mpa", code: 1, userInfo: [NSLocalizedDescriptionKey: "Whisper answered with something that is not JSON"]) }
-            if let e = o["error"] as? String { throw NSError(domain: "mpa", code: 2, userInfo: [NSLocalizedDescriptionKey: "Whisper, chunk \(i + 1): \(e)"]) }
-            if l.isEmpty { l = o["lang"] as? String ?? "" }
-            let text = o["text"] as? String ?? ""
-            if !text.isEmpty { fullText.append(text) }
-            if let w = o["words"] as? [[String: Any]], !w.isEmpty {
-                for x in w { var y = x; y["t"] = num(x["t"]) + off; y["d"] = num(x["d"]) + off; allWords.append(y) }
-            } else if !text.isEmpty {
-                fallback.append(Seg(id: 0, start: off, end: off + 300, text: text.trimmingCharacters(in: .whitespaces)))
+    /// Voice to Text (Mantra)'s local API port: the setting, else the registry, else its row in APPS AND SERVERS.md.
+    func voiceToTextPort() -> Int? {
+        let ud = UserDefaults.standard.integer(forKey: "voiceToTextPort")
+        if ud > 0 { return ud }
+        let reg = NSHomeDirectory() + "/.config/mantra-ports.json"
+        if let d = FileManager.default.contents(atPath: reg),
+           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            for (k, v) in o {
+                let key = k.lowercased()
+                if key.contains("voice") && key.contains("text"), let m = v as? [String: Any], let p = m["port"] as? Int { return p }
             }
         }
-        var result: [Seg] = allWords.isEmpty ? fallback : segmentWords(allWords)
-        if result.isEmpty && !fullText.isEmpty { result = [Seg(id: 0, start: 0, end: 0, text: fullText.joined(separator: " "))] }
-        for i in result.indices { result[i].id = i }
-        try? FileManager.default.removeItem(at: chunkDir)
-        let o: [String: Any] = ["text": fullText.joined(separator: " "), "words": allWords, "lang": l]
-        guard !result.isEmpty else { throw NSError(domain: "mpa", code: 3, userInfo: [NSLocalizedDescriptionKey: "No speech found"]) }
-        let out: [String: Any] = [
-            "video": url.lastPathComponent, "lang": l, "text": o["text"] as? String ?? "",
-            "segments": result.map { ["start": $0.start, "end": $0.end, "text": $0.text] },
-            "words": o["words"] as? [[String: Any]] ?? []
-        ]
-        let json = try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys])
-        try json.write(to: URL(fileURLWithPath: transcriptPath))
-        segs = result; lang = l; rebuild()
-        phase = "Transcribed: \(result.count) segments in \(fmtTime(Date().timeIntervalSince(t0)))"
+        let md = NSHomeDirectory() + "/Downloads/API/APPS AND SERVERS.md"
+        if let t = try? String(contentsOfFile: md, encoding: .utf8) {
+            for line in t.components(separatedBy: "\n") where line.contains("Voice to Text") && line.contains("127.0.0.1:") {
+                if let r = line.range(of: "127\\.0\\.0\\.1:[0-9]+", options: .regularExpression) {
+                    return Int(line[r].dropFirst(10))
+                }
+            }
+        }
+        return nil
     }
 
-    nonisolated private static func ffmpeg(_ args: [String]) async throws {
-        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg")
-            p.arguments = args
-            p.standardOutput = FileHandle.nullDevice
-            p.standardError = FileHandle.nullDevice
-            p.terminationHandler = { pr in
-                if pr.terminationStatus == 0 { c.resume() }
-                else { c.resume(throwing: NSError(domain: "mpa", code: 10, userInfo: [NSLocalizedDescriptionKey: "ffmpeg failed (exit \(pr.terminationStatus))"])) }
+    private func runTranscription(_ url: URL) async throws {
+        guard let port = voiceToTextPort() else {
+            throw NSError(domain: "mpa", code: 5, userInfo: [NSLocalizedDescriptionKey: "Voice to Text (Mantra) API port not found. Set it in Settings."])
+        }
+        let base = "http://127.0.0.1:\(port)"
+        phase = "Sending the video to Voice to Text (Mantra)"
+        var req = URLRequest(url: URL(string: base + "/transcribe")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["path": url.path])
+        req.timeoutInterval = 60
+        let (d0, _) = try await URLSession.shared.data(for: req)
+        guard let o0 = try JSONSerialization.jsonObject(with: d0) as? [String: Any] else {
+            throw NSError(domain: "mpa", code: 1, userInfo: [NSLocalizedDescriptionKey: "Voice to Text did not answer with JSON"])
+        }
+        if let e = o0["error"] as? String { throw NSError(domain: "mpa", code: 2, userInfo: [NSLocalizedDescriptionKey: "Voice to Text: \(e)"]) }
+        guard let id = (o0["id"] ?? o0["job"] ?? o0["job_id"]).map({ "\($0)" }) else {
+            throw NSError(domain: "mpa", code: 6, userInfo: [NSLocalizedDescriptionKey: "Voice to Text gave no job id"])
+        }
+        var fails = 0
+        while true {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            var jr = URLRequest(url: URL(string: base + "/job/\(id)")!)
+            jr.timeoutInterval = 30
+            guard let (d, _) = try? await URLSession.shared.data(for: jr),
+                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+                fails += 1
+                if fails > 30 { throw NSError(domain: "mpa", code: 7, userInfo: [NSLocalizedDescriptionKey: "Voice to Text stopped answering"]) }
+                continue
             }
-            do { try p.run() } catch { c.resume(throwing: error) }
+            fails = 0
+            let status = ((o["status"] ?? o["state"]) as? String ?? "").lowercased()
+            var prog = ""
+            if let p = o["progress"] as? Double { prog = p <= 1 ? " \(Int(p * 100)) %" : " \(Int(p)) %" }
+            else if let p = o["progress"] as? String { prog = " " + p }
+            phase = "Voice to Text: \(status.isEmpty ? "working" : status)\(prog)"
+            if ["error", "failed", "failure"].contains(status) {
+                throw NSError(domain: "mpa", code: 8, userInfo: [NSLocalizedDescriptionKey: "Voice to Text: \(o["error"] as? String ?? o["message"] as? String ?? "failed")"])
+            }
+            let finished = ["done", "finished", "complete", "completed", "ready", "ok"].contains(status)
+            if finished {
+                if let f = FileManager.default.contents(atPath: transcriptPath) { loadTranscript(f) }
+                if segs.isEmpty, let sg = o["segments"] as? [[String: Any]] {
+                    segs = sg.enumerated().map { Seg(id: $0.offset, start: num($0.element["start"]), end: num($0.element["end"]), text: ($0.element["text"] as? String ?? "").trimmingCharacters(in: .whitespaces)) }
+                    let out: [String: Any] = ["source": url.lastPathComponent, "engine": o["engine"] as? String ?? "", "language": o["language"] as? String ?? "",
+                        "segments": segs.map { ["start": $0.start, "end": $0.end, "text": $0.text] }]
+                    if let j = try? JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]) {
+                        try? j.write(to: URL(fileURLWithPath: transcriptPath))
+                    }
+                }
+                guard !segs.isEmpty else { throw NSError(domain: "mpa", code: 3, userInfo: [NSLocalizedDescriptionKey: "Voice to Text finished but gave no segments"]) }
+                rebuild()
+                phase = "Transcribed: \(segs.count) segments in \(fmtTime(Date().timeIntervalSince(t0)))"
+                return
+            }
         }
     }
 
