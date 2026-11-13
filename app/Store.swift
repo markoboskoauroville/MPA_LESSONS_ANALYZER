@@ -589,13 +589,13 @@ final class Store: ObservableObject {
 
     func status() -> [String: Any] {
         ["app": "MPA Lessons Analyzer (Mantra)", "version": VERSION, "port": port,
-         "video": videoURL?.path ?? "", "busy": busy, "phase": phase, "elapsed": Int(elapsed),
+         "video": videoURL?.path ?? "", "busy": busy, "phase": phase, "elapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : Int(elapsed),
          "segments": segs.count, "segmentsShown": shownSegs, "lessonOnly": lessonOnly, "language": pickLang,
          "strokes": strokes.count, "clips": clips.count, "shots": shots.count, "playingClip": playingClip.map { $0 as Any } ?? NSNull(), "voiceFile": voicePath, "drumsFile": drumsPath, "strokesFile": strokesPath,
          "fullTranscriptFile": fullPath, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
          "remarks": analysis.remarks.count, "error": error, "lang": lang,
          "transcriptFile": videoURL == nil ? "" : transcriptPath, "analysisFile": videoURL == nil ? "" : analysisPath,
-         "exportFolder": exportFolder, "mode": WatchScreen.shared.mode, "muted": muted, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
+         "exportFolder": exportFolder, "protocol": 1, "name": "MPA Lessons Analyzer (Mantra)", "shot": Shoot.shared.current?.n ?? 0, "takes": Shoot.shared.takes.filter { $0.shot == (Shoot.shared.current?.n ?? 0) }.count, "mode": WatchScreen.shared.mode, "muted": muted, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
     }
 
     func route(_ method: String, _ path: String, _ body: Data, lan: Bool = false) -> (Int, Data) {
