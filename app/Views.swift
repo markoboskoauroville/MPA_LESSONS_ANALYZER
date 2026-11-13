@@ -60,10 +60,15 @@ struct ContentView: View {
                 Divider()
             }
             if s.videoURL != nil {
-                if s.playerReady { PlayerPane(player: s.player).frame(height: 260) }
-                else { Text("Loading the video...").foregroundStyle(.secondary).frame(height: 40) }
+                HStack(spacing: 0) {
+                    if s.playerReady { PlayerPane(player: s.player).frame(maxWidth: s.clips.isEmpty ? .infinity : 360) }
+                    else { Text("Loading the video...").foregroundStyle(.secondary).frame(maxWidth: .infinity) }
+                    if !s.clips.isEmpty { Divider(); PlaylistView() }
+                }
+                .frame(height: 260)
                 Divider()
             }
+            if !s.shots.isEmpty { ShotsView(); Divider() }
             TableView()
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
@@ -118,6 +123,98 @@ struct ContentView: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+}
+
+struct PlaylistView: View {
+    @EnvironmentObject var s: Store
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("PLAYLIST").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Text("\(s.clips.count) clips").font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Button(s.playingAll ? "Stop" : "Play all") { s.playAllClips() }.buttonStyle(.plain).foregroundStyle(Color.orange)
+                if s.playingClip != nil && !s.playingAll { Button("Stop") { s.stopPlayback() }.buttonStyle(.plain).foregroundStyle(.secondary) }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            Divider()
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(s.clips) { c in
+                        let on = s.playingClip == c.n
+                        VStack(spacing: 0) {
+                            HStack(alignment: .top, spacing: 8) {
+                                Text("\(c.n)").font(.system(size: 12, weight: .semibold, design: .rounded)).frame(width: 22, alignment: .trailing)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(c.title).font(.system(size: 13, weight: on ? .bold : .regular)).fixedSize(horizontal: false, vertical: true)
+                                    if !c.shoot.isEmpty { Text(c.shoot).font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text("\(fmtTime(c.start))-\(fmtTime(c.end))").font(.system(size: 11, design: .monospaced))
+                                    Text(fmtTime(c.end - c.start)).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 5).padding(.horizontal, 12)
+                            .background(on ? Color.accentColor.opacity(0.22) : Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture { s.playClip(c.n) }
+                            Rectangle().fill(Color.gray.opacity(0.25)).frame(height: 1)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct ShotsView: View {
+    @EnvironmentObject var s: Store
+    @State private var open = true
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("SHOTS").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Text("\(s.shots.count) videos to record").font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Button(open ? "Hide" : "Show") { open.toggle() }.buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            if open {
+                Divider()
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(s.shots) { sh in
+                            VStack(spacing: 0) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text("\(sh.n)").font(.system(size: 13, weight: .semibold, design: .rounded)).frame(width: 24, alignment: .trailing)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(spacing: 10) {
+                                            Text(sh.title).font(.system(size: 13, weight: .bold))
+                                            if sh.secs > 0 { Text("\(Int(sh.secs)) sec").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary) }
+                                            if !sh.code.isEmpty { Text(sh.code).font(.system(size: 11, design: .monospaced)).foregroundStyle(.teal) }
+                                        }
+                                        Text(sh.say).font(.callout).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    if !sh.watch.isEmpty {
+                                        Button(s.watchingShot == sh.n ? "Stop" : "WATCH") { s.watchShot(sh.n) }
+                                            .buttonStyle(.plain).foregroundStyle(Color.orange)
+                                            .help("Plays clips \(sh.watch.map(String.init).joined(separator: ", ")) of the original video")
+                                    }
+                                }
+                                .padding(.vertical, 6).padding(.horizontal, 16)
+                                .background(s.watchingShot == sh.n ? Color.accentColor.opacity(0.22) : Color.clear)
+                                Rectangle().fill(Color.gray.opacity(0.25)).frame(height: 1)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+        }
     }
 }
 

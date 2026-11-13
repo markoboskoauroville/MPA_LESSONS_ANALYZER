@@ -22,6 +22,26 @@ struct Remark: Equatable {
     var text: String
 }
 
+struct Clip: Equatable, Identifiable {
+    var n: Int
+    var title: String
+    var start: Double
+    var end: Double
+    var code: String
+    var shoot: String
+    var id: Int { n }
+}
+
+struct Shot: Equatable, Identifiable {
+    var n: Int
+    var title: String
+    var watch: [Int]
+    var secs: Double
+    var code: String
+    var say: String
+    var id: Int { n }
+}
+
 struct Cut: Equatable {
     var start: Double
     var end: Double
@@ -36,6 +56,8 @@ struct Stroke: Equatable {
 
 struct Analysis: Equatable {
     var cuts: [Cut] = []
+    var clips: [Clip] = []
+    var shots: [Shot] = []
     var title = ""
     var lesson = ""
     var sections: [LessonSection] = []
@@ -78,6 +100,17 @@ func parseAnalysis(_ data: Data) -> Analysis? {
     for c in (o["cut"] as? [[String: Any]] ?? []) {
         a.cuts.append(Cut(start: num(c["start"]), end: num(c["end"]), why: c["why"] as? String ?? ""))
     }
+    for (i, c) in (o["clips"] as? [[String: Any]] ?? []).enumerated() {
+        a.clips.append(Clip(n: c["n"] == nil ? i + 1 : Int(num(c["n"])), title: c["title"] as? String ?? "", start: num(c["start"]), end: num(c["end"]),
+                            code: c["code"] as? String ?? "", shoot: c["shoot"] as? String ?? ""))
+    }
+    for (i, c) in (o["shots"] as? [[String: Any]] ?? []).enumerated() {
+        a.shots.append(Shot(n: c["n"] == nil ? i + 1 : Int(num(c["n"])), title: c["title"] as? String ?? "",
+                            watch: (c["watch"] as? [Any] ?? []).map { Int(num($0)) }, secs: num(c["secs"]),
+                            code: c["code"] as? String ?? "", say: c["say"] as? String ?? ""))
+    }
+    a.shots.sort { $0.n < $1.n }
+    a.clips.sort { $0.n < $1.n }
     a.cuts.sort { $0.start < $1.start }
     a.sections.sort { $0.start < $1.start }
     a.remarks.sort { $0.start < $1.start }

@@ -27,6 +27,14 @@ final class Store: ObservableObject {
     @Published var pickLang: String = UserDefaults.standard.string(forKey: "transcribeLang") ?? "en" {
         didSet { UserDefaults.standard.set(pickLang, forKey: "transcribeLang") }
     }
+    @Published var playingClip: Int? = nil
+    @Published var playingAll = false
+    @Published var watchingShot: Int? = nil
+    private var queue: [Int] = []
+    private var qpos = 0
+    private var boundary: Any?
+    private var queueTask: Task<Void, Never>?
+    private var keyMonitor: Any?
     private var itemObs: NSKeyValueObservation?
     private var proc: Process?
 
@@ -38,7 +46,109 @@ final class Store: ObservableObject {
     private var timeObserver: Any?
     private let http = Http()
 
+    // MARK: playlist: clips are time codes of the original video; nothing is cut or exported
+    var clips: [Clip] { analysis.clips }
+
+    private func clearBoundary() { if let b = boundary { player.removeTimeObserver(b); boundary = nil } }
+
+    func playRange(_ a: Double, _ b: Double, clip: Int?) {
+        guard videoURL != nil, b > a else { return }
+        queueTask?.cancel()
+        playingClip = clip
+        run(a, b)
+    }
+
+    private func run(_ a: Double, _ b: Double) {
+        clearBoundary()
+        boundary = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: b, preferredTimescale: 600))], queue: .main) { [weak self] in
+            Task { @MainActor in self?.rangeEnded() }
+        }
+        player.seek(to: CMTime(seconds: a, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in self?.player.play() }
+        }
+    }
+
+    private func rangeEnded() {
+        player.pause(); clearBoundary()
+        if playingAll, qpos + 1 < queue.count {
+            qpos += 1
+            let next = queue[qpos]
+            queueTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                self?.playNumber(next)
+            }
+        } else { playingAll = false; playingClip = nil; watchingShot = nil; queue = [] }
+    }
+
+    func playIndex(_ i: Int) {
+        guard clips.indices.contains(i) else { return }
+        playRange(clips[i].start, clips[i].end, clip: clips[i].n)
+    }
+
+    private func playNumber(_ n: Int) {
+        guard let i = clips.firstIndex(where: { $0.n == n }) else { return }
+        playIndex(i)
+    }
+
+    /// One clip, or (all) that clip and the following ones in order.
+    func playClip(_ n: Int, all: Bool = false) {
+        guard let i = clips.firstIndex(where: { $0.n == n }) else { return }
+        watchingShot = nil
+        if all { startQueue(clips[i...].map { $0.n }) } else { queue = []; playingAll = false; playIndex(i) }
+    }
+
+    func startQueue(_ ns: [Int], shot: Int? = nil) {
+        let ok = ns.filter { n in clips.contains { $0.n == n } }
+        guard let f = ok.first else { return }
+        queue = ok; qpos = 0; playingAll = true; watchingShot = shot
+        playNumber(f)
+    }
+
+    /// WATCH: the shot's clips of the original video in order, start to end, no file is cut.
+    func watchShot(_ n: Int) {
+        guard let sh = analysis.shots.first(where: { $0.n == n }) else { return }
+        if watchingShot == n { stopPlayback(); return }
+        startQueue(sh.watch, shot: n)
+    }
+
+    func playAllClips() { if playingAll { stopPlayback() } else if let f = clips.first { playClip(f.n, all: true) } }
+    var shots: [Shot] { analysis.shots }
+
+    func stopPlayback() {
+        queueTask?.cancel(); clearBoundary(); player.pause(); playingClip = nil; playingAll = false; watchingShot = nil; queue = []
+    }
+
+    func stepClip(_ d: Int) {
+        guard !clips.isEmpty else { return }
+        let cur = playingClip.flatMap { n in clips.firstIndex(where: { $0.n == n }) }
+        let i = cur.map { min(max($0 + d, 0), clips.count - 1) } ?? (d > 0 ? 0 : clips.count - 1)
+        playingAll = false; watchingShot = nil; queue = []
+        playIndex(i)
+    }
+
+    func togglePlay() {
+        if player.rate != 0 { player.pause(); queueTask?.cancel() } else { player.play() }
+    }
+
+    func installKeys() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            if e.modifierFlags.intersection([.command, .control, .option]) != [] { return e }
+            if NSApp.keyWindow?.attachedSheet != nil || NSApp.keyWindow?.firstResponder is NSText { return e }
+            guard let s = self else { return e }
+            switch e.keyCode {
+            case 49: Task { @MainActor in s.togglePlay() }
+            case 123, 126: Task { @MainActor in s.stepClip(-1) }
+            case 124, 125: Task { @MainActor in s.stepClip(1) }
+            default: return e
+            }
+            return nil
+        }
+    }
+
     init() {
+        installKeys()
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] t in
             Task { @MainActor in self?.now = t.seconds }
         }
@@ -158,6 +268,7 @@ final class Store: ObservableObject {
     }
 
     func seek(_ t: Double) {
+        queueTask?.cancel(); clearBoundary(); playingClip = nil; playingAll = false; watchingShot = nil; queue = []
         player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         player.play()
     }
@@ -376,7 +487,7 @@ final class Store: ObservableObject {
         ["app": "MPA Lessons Analyzer (Mantra)", "version": VERSION, "port": port,
          "video": videoURL?.path ?? "", "busy": busy, "phase": phase, "elapsed": Int(elapsed),
          "segments": segs.count, "segmentsShown": shownSegs, "lessonOnly": lessonOnly, "language": pickLang,
-         "strokes": strokes.count, "voiceFile": voicePath, "drumsFile": drumsPath, "strokesFile": strokesPath,
+         "strokes": strokes.count, "clips": clips.count, "shots": shots.count, "playingClip": playingClip.map { $0 as Any } ?? NSNull(), "voiceFile": voicePath, "drumsFile": drumsPath, "strokesFile": strokesPath,
          "fullTranscriptFile": fullPath, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
          "remarks": analysis.remarks.count, "error": error, "lang": lang,
          "transcriptFile": videoURL == nil ? "" : transcriptPath, "analysisFile": videoURL == nil ? "" : analysisPath,
@@ -405,6 +516,39 @@ final class Store: ObservableObject {
             if busy { return (409, jsonData(["error": "busy"])) }
             split()
             return (202, jsonData(["started": true, "outputs": [voicePath, drumsPath, strokesPath]]))
+        case ("GET", "/clips"):
+            let c = clips.map { ["n": $0.n, "title": $0.title, "start": $0.start, "end": $0.end, "code": $0.code, "shoot": $0.shoot] as [String: Any] }
+            return (200, jsonData(["clips": c, "playing": playingClip.map { $0 as Any } ?? NSNull(), "playingAll": playingAll]))
+        case ("POST", "/play"):
+            guard videoURL != nil else { return (409, jsonData(["error": "no video open"])) }
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if o["n"] != nil {
+                let n = Int(num(o["n"]))
+                guard clips.contains(where: { $0.n == n }) else { return (404, jsonData(["error": "no clip \(n)"])) }
+                playClip(n, all: (o["all"] as? Bool) ?? false)
+            } else if o["all"] as? Bool == true {
+                guard let f = clips.first else { return (404, jsonData(["error": "no clips in the analysis"])) }
+                playClip(f.n, all: true)
+            } else if o["start"] != nil, o["end"] != nil {
+                let a = num(o["start"]), b = num(o["end"])
+                guard b > a else { return (400, jsonData(["error": "end must be after start"])) }
+                playingAll = false
+                playRange(a, b, clip: nil)
+            } else { return (400, jsonData(["error": "send {\"n\"}, {\"start\",\"end\"} or {\"all\":true}"])) }
+            return (200, jsonData(["playing": true]))
+        case ("GET", "/shots"):
+            let c = shots.map { ["n": $0.n, "title": $0.title, "watch": $0.watch, "secs": $0.secs, "code": $0.code, "say": $0.say] as [String: Any] }
+            return (200, jsonData(["shots": c, "watching": watchingShot.map { $0 as Any } ?? NSNull()]))
+        case ("POST", "/watch"):
+            guard videoURL != nil else { return (409, jsonData(["error": "no video open"])) }
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            let n = Int(num(o["n"]))
+            guard shots.contains(where: { $0.n == n }) else { return (404, jsonData(["error": "no shot \(n); GET /shots"])) }
+            if watchingShot != n { watchShot(n) }
+            return (200, jsonData(["watching": n]))
+        case ("POST", "/stop"):
+            stopPlayback()
+            return (200, jsonData(["playing": false]))
         case ("GET", "/strokes"):
             if let d = FileManager.default.contents(atPath: strokesPath) { return (200, d) }
             return (404, jsonData(["error": "no strokes yet; POST /split"]))
@@ -423,7 +567,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }
