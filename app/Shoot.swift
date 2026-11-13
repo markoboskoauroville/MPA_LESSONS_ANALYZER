@@ -374,17 +374,31 @@ final class Shoot: ObservableObject {
     // MARK: finish
     var exportDir: String { store.exportFolder + "/MPA Lesson 2/" }
 
+    /// a file name without ·, : or /, as in "Lesson 2 - 5 Hand coordination"
+    func safeName(_ t: String) -> String {
+        t.replacingOccurrences(of: "·", with: "-").replacingOccurrences(of: ":", with: "-").replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespaces)
+    }
+
     func finishPrompt() -> String {
         loadTakes()
-        var s = "# FINISH PROMPT: MPA Lesson 2\n\nSource lesson: \(store.videoName)\nExport folder: \(exportDir)\n\n"
-        let kept = shots.compactMap { sh in takes.last(where: { $0.shot == sh.n && $0.kept }).map { (sh, $0) } }
-        for (sh, t) in kept {
-            s += "## Lesson 2 · \(sh.n) \(sh.title)\n- Take: \(t.path) (\(Int(t.duration)) s)\n- Lab code: \(sh.code.isEmpty ? "-" : sh.code)\n- Said: \(sayText(sh))\n"
+        var s = "# FINISH PROMPT: \(lessonLabel)\n\nSource lesson: \(store.videoName)\nExport folder: \(exportDir)\n\n"
+        // the kept take of a shot, else its latest take (marked), so the prompt is never empty while takes exist
+        let used = shots.compactMap { sh -> (Shot, Take, Bool)? in
+            if let t = takes.last(where: { $0.shot == sh.n && $0.kept }) { return (sh, t, true) }
+            if let t = takes.last(where: { $0.shot == sh.n && !$0.note.contains("(discarded)") }) { return (sh, t, false) }
+            return nil
+        }
+        if used.isEmpty { s += "No takes yet.\n\n" }
+        for (sh, t, kept) in used {
+            let name = safeName("Lesson 2 - \(sh.n) \(sh.title)")
+            s += "## \(name)\n- Take: \(t.path) (\(Int(t.duration)) s)\(kept ? "" : " (not kept yet)")\n- Lab code: \(sh.code.isEmpty ? "-" : sh.code)\n- Said: \(sayText(sh))\n"
             if !t.note.isEmpty { s += "- Marko's note: \(t.note)\n" }
-            s += "- Actions: 1. DaVinci Resolve: import the take, apply his film-look grade, trim the start and end silence. 2. Export H.265 vertical (9:16) to \(exportDir) as \"Lesson 2 · \(sh.n) \(sh.title)\". 3. Upload the export. 4. Update the website lesson: the video, its text, and the Lab sequencer link for \(sh.code.isEmpty ? "this exercise (create the Lab item if missing)" : sh.code).\n\n"
+            s += "- Actions (one approval for 1 and 2 together): 1. Grade: his film-look grade (DaVinci Resolve), then trim the silence. 2. Export \"\(exportDir)/\(name).mp4\": .mp4 container, H.265 (tag hvc1), AAC, vertical 1080x1920. 3. Upload (one approval). 4. Website lesson page: the video, its text, the Lab sequencer link for \(sh.code.isEmpty ? "this exercise (create the Lab item if missing)" : sh.code) (one approval for the single deploy of the page, after all shots).\n\n"
         }
         let sk = shots.filter { skipped.contains($0.n) }
         if !sk.isEmpty { s += "Skipped shots: " + sk.map { "\($0.n) \($0.title)" }.joined(separator: ", ") + "\n\n" }
+        s += "Silence rule: ffmpeg silencedetect at -55 dB; keep 0.15 s before the first speech and 0.3 s after the last; at -45 dB cut speech tails. Self-check before reporting: ffprobe shows hvc1 + aac, 1080x1920, the duration matches the trim, the file name has no \"·\" or \":\".\n\n"
         s += "Every change waits for the supervisor's approval in `queen pending`.\n"
         return s
     }

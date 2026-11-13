@@ -714,6 +714,16 @@ final class Store: ObservableObject {
             guard let a = o["action"] as? String else { return (400, jsonData(["error": "send {\"action\": \"watch|record|stop|again|skip|next|note|edit_shot|add_say\", \"shot\"?, \"text\"?}"])) }
             Shoot.shared.perform(a, text: o["text"] as? String, shot: o["shot"].map { Int(num($0)) })
             return (200, jsonData(["done": a, "current": Shoot.shared.current?.n ?? 0, "status": Shoot.shared.status]))
+        case ("POST", "/takes/add"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            guard o["shot"] != nil, let p = o["path"] as? String, !p.isEmpty else { return (400, jsonData(["error": "send {shot, path, duration?, kept?}"])) }
+            let sh = Shoot.shared
+            sh.loadTakes()
+            let t = Take(shot: Int(num(o["shot"])), path: p, duration: num(o["duration"]), kept: (o["kept"] as? Bool) ?? false, note: (o["note"] as? String) ?? "")
+            if !sh.takes.contains(where: { $0.path == p }) { sh.takes.append(t) }
+            else if let i = sh.takes.firstIndex(where: { $0.path == p }) { sh.takes[i] = t }
+            sh.saveTakes()
+            return (200, sh.takesJSON())
         case ("GET", "/takes"):
             return (200, Shoot.shared.takesJSON())
         case ("GET", "/finish"):
@@ -736,7 +746,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /shot, POST /mute, GET /camera, POST /camera, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /takes/add, POST /shot, POST /mute, GET /camera, POST /camera, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }
