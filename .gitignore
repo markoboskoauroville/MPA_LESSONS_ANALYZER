@@ -4,3 +4,6 @@ build/
 *.mov
 *.transcript.json
 *.wav
+*.transcript.full.json
+*.strokes.json
+*.analysis.json

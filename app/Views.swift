@@ -3,7 +3,7 @@ import AVKit
 import AppKit
 
 struct StepButton: View {
-    let n: Int
+    let n: String
     let word: String
     let enabled: Bool
     let action: () -> Void
@@ -60,7 +60,8 @@ struct ContentView: View {
                 Divider()
             }
             if s.videoURL != nil {
-                PlayerPane(player: s.player).frame(height: 260)
+                if s.playerReady { PlayerPane(player: s.player).frame(height: 260) }
+                else { Text("Loading the video...").foregroundStyle(.secondary).frame(height: 40) }
                 Divider()
             }
             TableView()
@@ -81,12 +82,23 @@ struct ContentView: View {
 
     var steps: some View {
         HStack(spacing: 28) {
-            StepButton(n: 1, word: "Open", enabled: true) { s.chooseVideo() }
+            StepButton(n: "1", word: "Open", enabled: true) { s.chooseVideo() }
             Divider().frame(height: 20)
-            StepButton(n: 2, word: s.busy ? "Stop" : "Transcribe", enabled: s.videoURL != nil) { s.transcribeOrStop() }
+            StepButton(n: "2a", word: s.busy ? "Stop" : "Split voice/drums", enabled: s.videoURL != nil) { s.splitOrStop() }
             Divider().frame(height: 20)
-            StepButton(n: 3, word: "Analyze", enabled: !s.segs.isEmpty) { s.analyze() }
+            StepButton(n: "2", word: s.busy ? "Stop" : "Transcribe", enabled: s.videoURL != nil) { s.transcribeOrStop() }
+            Picker("", selection: $s.pickLang) {
+                ForEach(["en", "hr", "auto", "hi", "de", "es", "fr", "it", "ru"], id: \.self) { Text($0) }
+            }
+            .labelsHidden().frame(width: 72).help("Language of the transcription")
+            Divider().frame(height: 20)
+            StepButton(n: "3", word: "Analyze", enabled: !s.segs.isEmpty) { s.analyze() }
             Spacer()
+            Picker("", selection: $s.lessonOnly) {
+                Text("Lesson only").tag(true)
+                Text("Full").tag(false)
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 180)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
     }
@@ -99,7 +111,8 @@ struct ContentView: View {
             }
             HStack(alignment: .top, spacing: 16) {
                 Cell(label: "ELAPSED", value: s.busy ? fmtTime(s.elapsed) : "-")
-                Cell(label: "SEGMENTS", value: "\(s.segs.count)")
+                Cell(label: "SEGMENTS", value: s.shownSegs == s.segs.count ? "\(s.segs.count)" : "\(s.shownSegs) of \(s.segs.count)")
+                Cell(label: "STROKES", value: s.strokes.isEmpty ? "-" : "\(s.strokes.count)")
                 Cell(label: "LESSON", value: s.analysis.title.isEmpty ? "-" : (s.analysis.lesson.isEmpty ? s.analysis.title : "\(s.analysis.lesson): \(s.analysis.title)"))
                 Cell(label: "API", value: s.port == 0 ? "-" : "127.0.0.1:\(s.port)")
             }
@@ -115,6 +128,7 @@ struct TableView: View {
             HStack(alignment: .top, spacing: 12) {
                 Text("Time").frame(width: 56, alignment: .leading)
                 Text("Transcription").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Strokes").frame(width: 110, alignment: .leading)
                 Text("Remarks").frame(maxWidth: .infinity, alignment: .leading)
             }
             .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
@@ -130,7 +144,7 @@ struct TableView: View {
                         ForEach(s.items) { item in
                             switch item {
                             case .header(_, let sec): SectionHeader(sec: sec)
-                            case .row(let seg, let rem): RowView(seg: seg, remarks: rem, active: s.now >= seg.start && s.now < seg.end)
+                            case .row(let seg, let rem, let strokes, let cut): RowView(seg: seg, remarks: rem, strokes: strokes, cut: cut, active: s.now >= seg.start && s.now < seg.end)
                             }
                         }
                     }
@@ -163,13 +177,23 @@ struct RowView: View {
     @EnvironmentObject var s: Store
     let seg: Seg
     let remarks: [Remark]
+    let strokes: String
+    let cut: String?
     let active: Bool
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 Text(fmtTime(seg.start)).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
                     .frame(width: 56, alignment: .leading)
-                Text(seg.text).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(seg.text).fixedSize(horizontal: false, vertical: true)
+                    if let c = cut { Text("cut: \(c)").font(.system(size: 11)).italic().foregroundStyle(.secondary) }
+                }
+                .opacity(cut == nil ? 1 : 0.45)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(strokes).font(.system(size: 11, design: .monospaced)).foregroundStyle(.teal)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 110, alignment: .leading)
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(remarks.enumerated()), id: \.offset) { _, r in
                         Text(r.text).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -229,6 +253,7 @@ struct PlayerPane: NSViewRepresentable {
     func makeNSView(context: Context) -> AVPlayerView {
         let v = AVPlayerView()
         v.player = player
+        v.videoGravity = .resizeAspect
         v.controlsStyle = .inline
         return v
     }

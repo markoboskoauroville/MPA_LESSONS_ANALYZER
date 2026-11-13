@@ -19,6 +19,16 @@ final class Store: ObservableObject {
     @Published var now = 0.0
     @Published var port = 0
     @Published var lang = ""
+    @Published var strokes: [Stroke] = []
+    @Published var playerReady = false
+    @Published var lessonOnly: Bool = (UserDefaults.standard.object(forKey: "lessonOnly") as? Bool) ?? true {
+        didSet { UserDefaults.standard.set(lessonOnly, forKey: "lessonOnly"); rebuild() }
+    }
+    @Published var pickLang: String = UserDefaults.standard.string(forKey: "transcribeLang") ?? "en" {
+        didSet { UserDefaults.standard.set(pickLang, forKey: "transcribeLang") }
+    }
+    private var itemObs: NSKeyValueObservation?
+    private var proc: Process?
 
     let player = AVPlayer()
     private var task: Task<Void, Never>?
@@ -39,7 +49,11 @@ final class Store: ObservableObject {
 
     // MARK: files
     var base: String { videoURL.map { $0.deletingPathExtension().path } ?? "" }
-    var transcriptPath: String { base + ".transcript.json" }
+    var transcriptPath: String { base + ".transcript.json" }       // lesson only (cut ranges applied)
+    var fullPath: String { base + ".transcript.full.json" }        // everything that was said
+    var voicePath: String { base + ".voice.wav" }
+    var drumsPath: String { base + ".drums.wav" }
+    var strokesPath: String { base + ".strokes.json" }
     var analysisPath: String { base + ".analysis.json" }
     var videoName: String { videoURL?.lastPathComponent ?? "" }
 
@@ -56,13 +70,61 @@ final class Store: ObservableObject {
         guard FileManager.default.fileExists(atPath: url.path) else { error = "File not found: \(url.path)"; return false }
         task?.cancel(); busy = false; stopTicker()
         videoURL = url
-        player.replaceCurrentItem(with: AVPlayerItem(url: url))
-        segs = []; analysis = Analysis(); hasAnalysis = false; analysisStamp = nil; error = ""; lang = ""
-        if let d = FileManager.default.contents(atPath: transcriptPath) { loadTranscript(d) }
+        attachVideo(url)
+        segs = []; analysis = Analysis(); hasAnalysis = false; analysisStamp = nil; error = ""; lang = ""; strokes = []
+        loadTranscripts()
+        loadStrokes()
         phase = segs.isEmpty ? "Opened. Next: 2 Transcribe" : "Opened, transcript found (\(segs.count) segments)"
         pollAnalysis(force: true)
         rebuild()
         return true
+    }
+
+    /// The player is attached to the view only when its item is ready (a portrait H.264 file showed just the QuickTime icon before).
+    func attachVideo(_ url: URL) {
+        playerReady = false
+        itemObs?.invalidate()
+        let item = AVPlayerItem(asset: AVURLAsset(url: url))
+        itemObs = item.observe(\.status, options: [.initial, .new]) { [weak self] it, _ in
+            Task { @MainActor in
+                guard let s = self else { return }
+                if it.status == .readyToPlay { s.playerReady = true }
+                else if it.status == .failed { s.error = "The video cannot be played: \(it.error?.localizedDescription ?? "unknown error")" }
+            }
+        }
+        player.replaceCurrentItem(with: item)
+    }
+
+    /// The full transcript is the source of truth; .transcript.json is derived from it with the analysis' cut ranges.
+    func loadTranscripts() {
+        let fm = FileManager.default
+        if let d = fm.contents(atPath: fullPath) { loadTranscript(d) }
+        else if let d = fm.contents(atPath: transcriptPath) {
+            loadTranscript(d)
+            let flag = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["lessonOnly"] as? Bool ?? false
+            if !flag { try? d.write(to: URL(fileURLWithPath: fullPath)) }
+        }
+    }
+
+    func loadStrokes() {
+        guard let d = FileManager.default.contents(atPath: strokesPath),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let arr = o["strokes"] as? [[String: Any]] else { strokes = []; return }
+        strokes = arr.map { Stroke(t: num($0["t"]), db: num($0["db"]), cls: $0["cls"] as? String ?? "") }.sorted { $0.t < $1.t }
+    }
+
+    /// Writes <video>.transcript.json = the full transcript without the rows that start inside a cut range.
+    func writeLessonOnly() {
+        guard !segs.isEmpty, let d = FileManager.default.contents(atPath: fullPath),
+              var o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let arr = o["segments"] as? [[String: Any]] else { return }
+        let kept = arr.enumerated().filter { hasAnalysis ? cutWhy(Seg(id: $0.offset, start: num($0.element["start"]), end: num($0.element["end"]), text: ""), analysis) == nil : true }.map { $0.element }
+        o["segments"] = kept
+        o["lessonOnly"] = hasAnalysis
+        o["full"] = (fullPath as NSString).lastPathComponent
+        if let j = try? JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys]) {
+            try? j.write(to: URL(fileURLWithPath: transcriptPath))
+        }
     }
 
     func loadTranscript(_ d: Data) {
@@ -72,7 +134,8 @@ final class Store: ObservableObject {
         lang = o["language"] as? String ?? o["lang"] as? String ?? ""
     }
 
-    func rebuild() { items = buildItems(segs, analysis) }
+    func rebuild() { items = buildItems(segs, analysis, strokes, lessonOnly: lessonOnly) }
+    var shownSegs: Int { lessonOnly && hasAnalysis ? segs.filter { cutWhy($0, analysis) == nil }.count : segs.count }
 
     func pollAnalysis(force: Bool = false) {
         guard videoURL != nil else { return }
@@ -83,6 +146,7 @@ final class Store: ObservableObject {
         analysisStamp = m
         if let d = FileManager.default.contents(atPath: analysisPath), let a = parseAnalysis(d) {
             analysis = a; hasAnalysis = true; error = ""
+            writeLessonOnly()
             rebuild()
         } else { error = "The analysis file could not be read (not valid JSON)." }
     }
@@ -113,12 +177,74 @@ final class Store: ObservableObject {
         transcribe()
     }
 
+    func drumsplitURL() -> URL? {
+        var c: [String] = []
+        if let e = Bundle.main.executableURL { c.append(e.deletingLastPathComponent().appendingPathComponent("drumsplit").path) }
+        c += [NSHomeDirectory() + "/.local/bin/drumsplit", "/usr/local/bin/drumsplit", "/opt/homebrew/bin/drumsplit"]
+        return c.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+    }
+
+    func splitOrStop() {
+        if busy { task?.cancel(); proc?.terminate(); return }
+        split()
+    }
+
+    func split() {
+        guard let url = videoURL, !busy else { return }
+        busy = true; error = ""; startTicker()
+        task = Task { [weak self] in
+            guard let self = self else { return }
+            do { try await self.runSplit(url) }
+            catch is CancellationError { self.phase = "Stopped" }
+            catch { self.error = "\(error)"; self.phase = "Split failed" }
+            self.busy = false; self.stopTicker()
+        }
+    }
+
+    /// Runs the drumsplit tool (Supertone Clear, offline): <name>.voice.wav, <name>.drums.wav, <name>.strokes.json next to the video.
+    private func runSplit(_ url: URL) async throws {
+        guard let tool = drumsplitURL() else {
+            throw NSError(domain: "mpa", code: 20, userInfo: [NSLocalizedDescriptionKey: "drumsplit was not found inside the app (Contents/MacOS/drumsplit) or in ~/.local/bin."])
+        }
+        phase = "Splitting voice and drums (Clear)"
+        let p = Process()
+        p.executableURL = tool
+        p.arguments = [url.path]
+        let pipe = Pipe()
+        p.standardOutput = pipe; p.standardError = pipe
+        var tail = ""
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let d = h.availableData
+            guard !d.isEmpty, let t = String(data: d, encoding: .utf8) else { return }
+            let lines = t.split(whereSeparator: \.isNewline).map(String.init)
+            guard let last = lines.last else { return }
+            tail = (tail + "\n" + t).suffix(600).description
+            Task { @MainActor in self?.phase = "Split: " + last }
+        }
+        proc = p
+        let code: Int32 = await withCheckedContinuation { cont in
+            p.terminationHandler = { cont.resume(returning: $0.terminationStatus) }
+            do { try p.run() } catch { cont.resume(returning: -1) }
+        }
+        pipe.fileHandleForReading.readabilityHandler = nil
+        proc = nil
+        try Task.checkCancellation()
+        if code != 0 {
+            throw NSError(domain: "mpa", code: 21, userInfo: [NSLocalizedDescriptionKey: "drumsplit failed (\(code)): \(tail.trimmingCharacters(in: .whitespacesAndNewlines))"])
+        }
+        loadStrokes(); rebuild()
+        phase = "Split done: \(strokes.count) strokes in \(fmtTime(Date().timeIntervalSince(t0)))"
+    }
+
     func transcribe() {
         guard let url = videoURL, !busy else { return }
         busy = true; error = ""; startTicker()
         task = Task { [weak self] in
             guard let self = self else { return }
-            do { try await self.runTranscription(url) }
+            do {
+                if !FileManager.default.fileExists(atPath: self.voicePath) { try await self.runSplit(url) }
+                try await self.runTranscription(url)
+            }
             catch is CancellationError { self.phase = "Stopped" }
             catch let e as URLError where e.code == .cancelled { self.phase = "Stopped" }
             catch { self.error = "\(error)"; self.phase = "Transcription failed" }
@@ -154,11 +280,11 @@ final class Store: ObservableObject {
             throw NSError(domain: "mpa", code: 5, userInfo: [NSLocalizedDescriptionKey: "Voice to Text (Mantra) API port not found. Set it in Settings."])
         }
         let base = "http://127.0.0.1:\(port)"
-        phase = "Sending the video to Voice to Text (Mantra)"
+        phase = "Sending the voice track to Voice to Text (Mantra), Groq large-v3"
         var req = URLRequest(url: URL(string: base + "/transcribe")!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["path": url.path])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["path": voicePath, "engine": "groq_v3", "language": pickLang])
         req.timeoutInterval = 60
         let (d0, _) = try await URLSession.shared.data(for: req)
         guard let o0 = try JSONSerialization.jsonObject(with: d0) as? [String: Any] else {
@@ -191,14 +317,15 @@ final class Store: ObservableObject {
             }
             let finished = ["done", "finished", "complete", "completed", "ready", "ok"].contains(status)
             if finished {
-                if let f = FileManager.default.contents(atPath: transcriptPath) { loadTranscript(f) }
+                importVoiceTranscript(url)
                 if segs.isEmpty, let sg = o["segments"] as? [[String: Any]] {
                     segs = sg.enumerated().map { Seg(id: $0.offset, start: num($0.element["start"]), end: num($0.element["end"]), text: ($0.element["text"] as? String ?? "").trimmingCharacters(in: .whitespaces)) }
                     let out: [String: Any] = ["source": url.lastPathComponent, "engine": o["engine"] as? String ?? "", "language": o["language"] as? String ?? "",
                         "segments": segs.map { ["start": $0.start, "end": $0.end, "text": $0.text] }]
                     if let j = try? JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]) {
-                        try? j.write(to: URL(fileURLWithPath: transcriptPath))
+                        try? j.write(to: URL(fileURLWithPath: fullPath))
                     }
+                    writeLessonOnly()
                 }
                 guard !segs.isEmpty else { throw NSError(domain: "mpa", code: 3, userInfo: [NSLocalizedDescriptionKey: "Voice to Text finished but gave no segments"]) }
                 rebuild()
@@ -206,6 +333,22 @@ final class Store: ObservableObject {
                 return
             }
         }
+    }
+
+    /// Voice to Text names its result after the voice file (<name>.voice.transcript.json): keep it as <video>.transcript.full.json,
+    /// then derive <video>.transcript.json (lesson only) from it.
+    func importVoiceTranscript(_ url: URL) {
+        let vt = base + ".voice.transcript.json"
+        guard let d = FileManager.default.contents(atPath: vt),
+              var o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        o["source"] = url.lastPathComponent
+        o["voice"] = (voicePath as NSString).lastPathComponent
+        o["lessonOnly"] = false
+        if let j = try? JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys]) {
+            try? j.write(to: URL(fileURLWithPath: fullPath))
+        }
+        loadTranscript(FileManager.default.contents(atPath: fullPath) ?? d)
+        writeLessonOnly()
     }
 
     // MARK: settings
@@ -232,7 +375,9 @@ final class Store: ObservableObject {
     func status() -> [String: Any] {
         ["app": "MPA Lessons Analyzer (Mantra)", "version": VERSION, "port": port,
          "video": videoURL?.path ?? "", "busy": busy, "phase": phase, "elapsed": Int(elapsed),
-         "segments": segs.count, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
+         "segments": segs.count, "segmentsShown": shownSegs, "lessonOnly": lessonOnly, "language": pickLang,
+         "strokes": strokes.count, "voiceFile": voicePath, "drumsFile": drumsPath, "strokesFile": strokesPath,
+         "fullTranscriptFile": fullPath, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
          "remarks": analysis.remarks.count, "error": error, "lang": lang,
          "transcriptFile": videoURL == nil ? "" : transcriptPath, "analysisFile": videoURL == nil ? "" : analysisPath,
          "exportFolder": exportFolder]
@@ -252,6 +397,20 @@ final class Store: ObservableObject {
             if busy { return (409, jsonData(["error": "already transcribing"])) }
             transcribe()
             return (202, jsonData(["started": true]))
+        case ("POST", "/split"):
+            if let o = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let p = o["path"] as? String {
+                _ = open(URL(fileURLWithPath: (p as NSString).expandingTildeInPath))
+            }
+            guard videoURL != nil else { return (409, jsonData(["error": "no video open; send {\"path\": \"...\"} or POST /open first"])) }
+            if busy { return (409, jsonData(["error": "busy"])) }
+            split()
+            return (202, jsonData(["started": true, "outputs": [voicePath, drumsPath, strokesPath]]))
+        case ("GET", "/strokes"):
+            if let d = FileManager.default.contents(atPath: strokesPath) { return (200, d) }
+            return (404, jsonData(["error": "no strokes yet; POST /split"]))
+        case ("GET", "/transcript/full"):
+            if let d = FileManager.default.contents(atPath: fullPath) { return (200, d) }
+            return (404, jsonData(["error": "no full transcript yet"]))
         case ("GET", "/transcript"):
             if let d = FileManager.default.contents(atPath: transcriptPath) { return (200, d) }
             return (404, jsonData(["error": "no transcript yet"]))
@@ -260,10 +419,11 @@ final class Store: ObservableObject {
             return (404, jsonData(["error": "no analysis file yet"]))
         case ("POST", "/reload"):
             pollAnalysis(force: true)
-            if let d = FileManager.default.contents(atPath: transcriptPath), segs.isEmpty { loadTranscript(d); rebuild() }
+            if segs.isEmpty { loadTranscripts() }
+            loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /transcribe, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }

@@ -22,7 +22,20 @@ struct Remark: Equatable {
     var text: String
 }
 
+struct Cut: Equatable {
+    var start: Double
+    var end: Double
+    var why: String
+}
+
+struct Stroke: Equatable {
+    var t: Double
+    var db: Double
+    var cls: String
+}
+
 struct Analysis: Equatable {
+    var cuts: [Cut] = []
     var title = ""
     var lesson = ""
     var sections: [LessonSection] = []
@@ -31,11 +44,11 @@ struct Analysis: Equatable {
 
 enum Item: Identifiable {
     case header(Int, LessonSection)
-    case row(Seg, [Remark])
+    case row(Seg, [Remark], String, String?)
     var id: String {
         switch self {
         case .header(let i, _): return "h\(i)"
-        case .row(let s, _): return "r\(s.id)"
+        case .row(let s, _, _, _): return "r\(s.id)"
         }
     }
 }
@@ -62,6 +75,10 @@ func parseAnalysis(_ data: Data) -> Analysis? {
         let en = r["end"] == nil ? st : num(r["end"])
         a.remarks.append(Remark(start: st, end: en, text: r["text"] as? String ?? ""))
     }
+    for c in (o["cut"] as? [[String: Any]] ?? []) {
+        a.cuts.append(Cut(start: num(c["start"]), end: num(c["end"]), why: c["why"] as? String ?? ""))
+    }
+    a.cuts.sort { $0.start < $1.start }
     a.sections.sort { $0.start < $1.start }
     a.remarks.sort { $0.start < $1.start }
     return a
@@ -98,7 +115,26 @@ func fmtTime(_ t: Double) -> String {
     return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
 }
 
-func buildItems(_ segs: [Seg], _ a: Analysis) -> [Item] {
+func cutWhy(_ seg: Seg, _ a: Analysis) -> String? {
+    for c in a.cuts where seg.start >= c.start && seg.start < c.end { return c.why.isEmpty ? "not the lesson" : c.why }
+    return nil
+}
+
+/// "12 | D5 T4 K3": the strokes whose time falls in [start, end).
+func strokeSummary(_ strokes: [Stroke], _ start: Double, _ end: Double) -> String {
+    var lo = 0, hi = strokes.count
+    while lo < hi { let m = (lo + hi) / 2; if strokes[m].t < start { lo = m + 1 } else { hi = m } }
+    var counts: [String: Int] = [:]
+    var n = 0
+    var i = lo
+    while i < strokes.count && strokes[i].t < end { counts[strokes[i].cls, default: 0] += 1; n += 1; i += 1 }
+    if n == 0 { return "" }
+    let order = ["D", "T", "P", "K", "-"]
+    return "\(n)  " + order.compactMap { c in counts[c].map { "\(c)\($0)" } }.joined(separator: " ")
+}
+
+func buildItems(_ allSegs: [Seg], _ a: Analysis, _ strokes: [Stroke], lessonOnly: Bool) -> [Item] {
+    let segs = allSegs
     var assigned = [[Remark]](repeating: [], count: segs.count)
     if !segs.isEmpty {
         for r in a.remarks {
@@ -110,10 +146,12 @@ func buildItems(_ segs: [Seg], _ a: Analysis) -> [Item] {
     var items: [Item] = []
     var si = 0
     for (i, s) in segs.enumerated() {
+        let why = cutWhy(s, a)
+        if lessonOnly && why != nil { continue }
         while si < a.sections.count && a.sections[si].start < s.end {
             items.append(.header(si, a.sections[si])); si += 1
         }
-        items.append(.row(s, assigned[i]))
+        items.append(.row(s, assigned[i], strokeSummary(strokes, s.start, s.end), why))
     }
     while si < a.sections.count { items.append(.header(si, a.sections[si])); si += 1 }
     return items
