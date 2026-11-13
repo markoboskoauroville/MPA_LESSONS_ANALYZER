@@ -17,3 +17,9 @@ Settings: export folder (UserDefaults `exportFolder`, default ~/Desktop), used b
 
 ## Next (request 256, momentaryupdates.md)
 Shooting assistant (Beatrice voice, Sony via Webcam Recorder, Resolve grade/trim/export), website lesson update with Lab sequencer, Queen corrections. Never put videos, transcripts or keys in this repo. No README, no description (public, unpromoted).
+
+## v6-v7 (13.11.2026): the first step of the shooting assistant
+- WATCH (a shot's WATCH button, POST /watch {"n"}) opens a borderless full-screen window on the display with the menu bar (the BenQ), the clips as video only (aspect fit, black around), sound to the default output. Esc/CLOSE returns. RECORD button bottom centre; while recording it becomes STOP in the same place. SEEN 13.11.2026: shot 1 full screen on the BenQ, two captures differ.
+- RECORD: prepareCamera() opens Webcam Recorder (Mantra) when its API is silent, chooses ILCE-7M5 vertical slice, waits for fps > 0, POST /record/start with the name "Lesson 12.11.2026 · shot N · CODE · take K"; STOP lists the take in <video>.takes.json with its path. NOT YET RUN (no test recordings).
+- LIVE (v7): POST /live shows the Sony's live picture (middle 9:16) full screen without recording; shown while recording with a REC dot and time. NOT PROVEN: in the first test the live view was black (Webcam Recorder was not running, Sony may need it streaming).
+- API added: GET /screen, POST /live, /record, /record/stop, /next, /again; /status has mode (idle|watch|live|record), recording, currentShot, recElapsed.
