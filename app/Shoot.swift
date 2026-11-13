@@ -182,9 +182,18 @@ final class Shoot: ObservableObject {
 
     func focus(shot n: Int) { if let i = shots.firstIndex(where: { $0.n == n }) { index = i } }
 
+    var dryRun = false
+    private var dryActive = false
+
     func startRecording() async {
         guard let s = current, !recording else { return }
         if let err = await prepareCamera() { log.append("camera: " + err); await speak("The camera is not ready."); return }
+        if dryRun {
+            dryActive = true; recording = true; recStart = Date()
+            status = "Dry run of shot \(s.n): everything works, no file is written."
+            WatchScreen.shared.showLive(shot: s.n)
+            return
+        }
         let (url, err) = await CameraEngine.shared.startRecord(title: takeTitle(s))
         guard let u = url else { status = err; log.append("record: " + err); return }
         currentTakePath = u.path
@@ -195,6 +204,7 @@ final class Shoot: ObservableObject {
 
     func stopRecording() async {
         guard recording, let s = current else { return }
+        if dryActive { dryActive = false; recording = false; dryRun = false; status = "Dry run finished: no file, no take."; return }
         let (p, d, err) = await CameraEngine.shared.stopRecord()
         recording = false
         guard let path = p else { status = "The take failed: \(err)"; return }
@@ -210,12 +220,13 @@ final class Shoot: ObservableObject {
 
     func watch() { if let s = current { store.watchShot(s.n); status = "Watching the source clips of shot \(s.n)." } }
 
-    func again() {
+    /// AGAIN = ready for another take of this shot: the last take is marked discarded, the live picture is shown, nothing records until RECORD
+    func again(dry: Bool = false) {
         Task {
             if recording { await stopRecording() }
-            if let p = pending, let i = takes.firstIndex(where: { $0.path == p.path }) { takes[i].note += (takes[i].note.isEmpty ? "" : " ") + "(discarded)"; saveTakes() }
-            pending = nil
-            await startRecording()
+            if !dry, let p = pending, let i = takes.firstIndex(where: { $0.path == p.path }) { takes[i].note += (takes[i].note.isEmpty ? "" : " ") + "(discarded)"; saveTakes() }
+            if !dry { pending = nil }
+            if let s = current { status = "Ready for take \(takes.filter { $0.shot == s.n }.count + 1) of shot \(s.n). Press RECORD."; WatchScreen.shared.showLive(shot: s.n) }
         }
     }
 

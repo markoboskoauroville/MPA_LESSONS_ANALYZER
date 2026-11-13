@@ -666,7 +666,7 @@ final class Store: ObservableObject {
         case ("POST", "/shot"):
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
             let n = Int(num(o["n"]))
-            guard shots.contains(where: { $0.n == n }) else { return (404, jsonData(["error": "no shot \(n)"])) }
+            guard o["n"] != nil, shots.contains(where: { $0.n == n }) else { return (400, jsonData(["error": "send {\"n\": <a shot number from GET /shots>}"])) }
             if !Shoot.shared.recording { stopPlayback(); Shoot.shared.focus(shot: n) }
             return (200, jsonData(["ok": true, "shot": Shoot.shared.current?.n ?? 0]))
         case ("POST", "/mute"):
@@ -689,17 +689,19 @@ final class Store: ObservableObject {
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
             if let n = o["shot"].map({ Int(num($0)) }) { Shoot.shared.focus(shot: n) }
             stopPlayback()
+            Shoot.shared.dryRun = (o["dryRun"] as? Bool) ?? false
             if !Shoot.shared.recording { Shoot.shared.toggleRecord() }
-            return (202, jsonData(["starting": true, "shot": Shoot.shared.current?.n ?? 0]))
+            return (200, jsonData(["starting": true, "dryRun": Shoot.shared.dryRun, "shot": Shoot.shared.current?.n ?? 0]))
         case ("POST", "/record/stop"):
             if Shoot.shared.recording { Shoot.shared.toggleRecord() }
-            return (202, jsonData(["stopping": true]))
+            return (200, jsonData(["stopping": true]))
         case ("POST", "/next"):
             Shoot.shared.perform("next")
             return (200, jsonData(["current": Shoot.shared.current?.n ?? 0]))
         case ("POST", "/again"):
-            Shoot.shared.perform("again")
-            return (202, jsonData(["current": Shoot.shared.current?.n ?? 0]))
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            Shoot.shared.again(dry: (o["dryRun"] as? Bool) ?? false)
+            return (200, jsonData(["ok": true, "ready": true, "dryRun": (o["dryRun"] as? Bool) ?? false, "current": Shoot.shared.current?.n ?? 0]))
         case ("GET", "/screen"):
             return (200, jsonData(WatchScreen.shared.info()))
         case ("POST", "/stop"):
