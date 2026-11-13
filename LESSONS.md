@@ -9,3 +9,5 @@
 5. Clear (v1.1.1) treats a frame drum as voice: Voice Solo keeps the strokes. Do not promise "drums removed"; test the plug-in on the real excerpt first (per-second RMS of voice vs drums).
 6. A portrait H.264 file in AVPlayerView showed only the QuickTime icon until the player item was ready: attach the view after AVPlayerItem.status == .readyToPlay, videoGravity .resizeAspect.
 7. Voice to Text names its result after the sent file: <name>.voice.transcript.json; the app copies it to <name>.transcript.full.json.
+8. The class file is AV1 + Opus in an mp4 (from the browser), not H.264/AAC: AVFoundation shows only the QuickTime icon. v5 checks isPlayable/isDecodable and plays an ffmpeg H.264+AAC copy cached in ~/Library/Caches/MPA Lessons Analyzer (same timeline). ffprobe the file before blaming the view.
+9. A lesson-only transcript written by someone else ("lessonOnly": true, no "by":"app") is shown as it is and never overwritten; the app's own derived copy carries "by":"app". Whisper's hallucination lines (thank you for watching, subscribe, Amara) are dropped when deriving.
