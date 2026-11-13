@@ -134,18 +134,20 @@ final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                     let input = try AVCaptureDeviceInput(device: cam)
                     if self.session.canAddInput(input) { self.session.addInput(input); self.videoIn = input } else { e = "\(cam.localizedName) cannot be added." }
                 } catch { e = "\(cam.localizedName) cannot be opened: \(error.localizedDescription)" }
-                if let f = Self.format4K(cam), (try? cam.lockForConfiguration()) != nil {
-                    cam.activeFormat = f; cam.unlockForConfiguration()
-                    self.session.sessionPreset = .inputPriority
-                } else {
-                    self.session.sessionPreset = self.session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : (self.session.canSetSessionPreset(.high) ? .high : .medium)
-                }
+                self.session.sessionPreset = self.session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : (self.session.canSetSessionPreset(.high) ? .high : .medium)
                 if self.session.canAddOutput(self.videoOut) { self.session.addOutput(self.videoOut) }
                 if let mic, let a = try? AVCaptureDeviceInput(device: mic), self.session.canAddInput(a) {
                     self.session.addInput(a); self.audioIn = a
                     if self.session.canAddOutput(self.audioOut) { self.session.addOutput(self.audioOut) }
                 }
                 self.session.commitConfiguration()
+                // the camera's own 4K, set on the device after the preset (macOS has no inputPriority preset); stays until the preset changes
+                if e == nil, let f = Self.format4K(cam), (try? cam.lockForConfiguration()) != nil {
+                    self.session.beginConfiguration()
+                    cam.activeFormat = f
+                    cam.unlockForConfiguration()
+                    self.session.commitConfiguration()
+                }
                 self.fps = Self.wholeFrameRate(cam)
                 self.captureQueue.async { self.lastAudioFormat = nil }
                 if e == nil, !self.session.isRunning { self.session.startRunning() }
