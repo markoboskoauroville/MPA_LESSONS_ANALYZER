@@ -134,7 +134,9 @@ final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                     let input = try AVCaptureDeviceInput(device: cam)
                     if self.session.canAddInput(input) { self.session.addInput(input); self.videoIn = input } else { e = "\(cam.localizedName) cannot be added." }
                 } catch { e = "\(cam.localizedName) cannot be opened: \(error.localizedDescription)" }
-                self.session.sessionPreset = self.session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : (self.session.canSetSessionPreset(.high) ? .high : .medium)
+                // the Sony's UVC format is 3840x2160 at 25: a 1080p preset would make the session scale it down (soft strip)
+                let want4K = Self.format4K(cam) != nil && self.session.canSetSessionPreset(.hd4K3840x2160)
+                self.session.sessionPreset = want4K ? .hd4K3840x2160 : (self.session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : (self.session.canSetSessionPreset(.high) ? .high : .medium))
                 if self.session.canAddOutput(self.videoOut) { self.session.addOutput(self.videoOut) }
                 if let mic, let a = try? AVCaptureDeviceInput(device: mic), self.session.canAddInput(a) {
                     self.session.addInput(a); self.audioIn = a
