@@ -37,3 +37,7 @@ POST /finish (JSON body: lesson, takes, out, lut, unkept). No LLM, no paid call.
 Grade: his film look is a Resolve Color-page DRX (~/ElevateMedia/tools/filmlook), not a LUT, so ffmpeg SKIPS it and says so
 (--lut applies a real .cube). The Resolve route (dedicated project "SecondTake <date>") is not implemented: Resolve was not
 running and a scripted DRX grade there is crash-prone.
+
+## State at close, 13.11.2026
+
+Second Take v5-v22 closed 13.11.2026: first come first served controller (423, RELEASE), no pairing, LAN limited to private/Tailscale; AGAIN only readies the next take; FINISH runs tools/secondtake-finish (trim, H.265 vertical export, verify, LESSON_DRAFT) as a subprocess; no silent camera fallback (SONY NOT CONNECTED screen, 409 on RECORD); 4K preset when the camera offers it; v21 recovers orphan takes and refuses quit while recording; tools/rehearsal_test is the reusable PASS/FAIL rehearsal. Waiting for Marko: the real shoot tomorrow (Sony on, USB Streaming, white balance 3200-3800 K, mic gain 50-60 %, checklist on the Desktop).

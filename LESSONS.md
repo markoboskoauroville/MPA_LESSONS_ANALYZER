@@ -11,3 +11,10 @@
 7. Voice to Text names its result after the sent file: <name>.voice.transcript.json; the app copies it to <name>.transcript.full.json.
 8. The class file is AV1 + Opus in an mp4 (from the browser), not H.264/AAC: AVFoundation shows only the QuickTime icon. v5 checks isPlayable/isDecodable and plays an ffmpeg H.264+AAC copy cached in ~/Library/Caches/MPA Lessons Analyzer (same timeline). ffprobe the file before blaming the view.
 9. A lesson-only transcript written by someone else ("lessonOnly": true, no "by":"app") is shown as it is and never overwritten; the app's own derived copy carries "by":"app". Whisper's hallucination lines (thank you for watching, subscribe, Amara) are dropped when deriving.
+
+## 13.11.2026
+
+- 13.11.2026: never fall back silently to another camera; show SONY NOT CONNECTED and answer 409 to RECORD, otherwise a take is shot with the wrong lens.
+- 13.11.2026: a stale picture behind an error message looks like a working camera (v20); clear it.
+- 13.11.2026: a rehearsal that is a script (tools/rehearsal_test, PASS/FAIL) finds more than reading code; keep it and rerun after every version.
+- 13.11.2026: a macOS compile fix can hide in a device-format call: set the 4K format on the device after the preset (v18).
