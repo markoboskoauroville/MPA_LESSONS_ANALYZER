@@ -28,6 +28,7 @@ var lsGain = false
 var noDefaults = false
 var floatOut = false
 var preset: String? = nil
+var strokesOnSource = false
 var sens = 1.0
 var quietDb = 18.0
 var auType = "aufx", auSub = "cler", auMfr = "Sptn"
@@ -50,6 +51,7 @@ while ai < argv.count {
     case "--float": floatOut = true
     case "--detect-only": detectOnly = true
     case "--preset": preset = nextArg()
+    case "--strokes-on-source": strokesOnSource = true
     case "--sens": sens = Double(nextArg()) ?? 1.0
     case "--quiet-db": quietDb = Double(nextArg()) ?? 18.0
     case "--au":
@@ -68,6 +70,7 @@ while ai < argv.count {
           --float         write 32-bit float WAVs (default 24-bit)
           --detect-only   treat the input as a drums track: only write strokes.json
           --preset n      load a factory preset of the plug-in (number or name) before the parameters
+          --strokes-on-source  detect strokes on the original audio, not on drums.wav (when the plug-in leaves the drums in the voice)
           --sens x        stroke detector sensitivity (default 1, higher = more strokes)
           --quiet-db x    strokes more than x dB below the loud strokes are K (default 18)
           --au t/s/m      other Audio Unit, default aufx/cler/Sptn
@@ -588,7 +591,7 @@ say(String(format: "RMS dBFS: source %.1f  voice %.1f  drums %.1f", rmsDb(srcL, 
 
 // MARK: strokes
 let mono = UnsafeMutablePointer<Float>.allocate(capacity: N)
-for i in 0..<N { mono[i] = 0.5 * (dL[i] + dR[i]) }
+for i in 0..<N { mono[i] = strokesOnSource ? 0.5 * (srcL[i] + srcR[i]) : 0.5 * (dL[i] + dR[i]) }
 let dt0 = now()
 let (strokes, tempo) = detectStrokes(mono, N)
 say(String(format: "stroke detection %.1f s", now() - dt0))

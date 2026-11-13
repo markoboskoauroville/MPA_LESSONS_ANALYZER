@@ -25,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleVersion</key><string>$V</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>SHOOT listens when you press TALK, so you can answer Beatrice by voice.</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
 PL

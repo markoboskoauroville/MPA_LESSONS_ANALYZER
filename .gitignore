@@ -7,3 +7,5 @@ build/
 *.transcript.full.json
 *.strokes.json
 *.analysis.json
+*.takes.json
+*.finish.md

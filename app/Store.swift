@@ -549,6 +549,20 @@ final class Store: ObservableObject {
         case ("POST", "/stop"):
             stopPlayback()
             return (200, jsonData(["playing": false]))
+        case ("POST", "/shoot/start"):
+            guard videoURL != nil, !shots.isEmpty else { return (409, jsonData(["error": "open the video; the analysis needs shots"])) }
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            Shoot.shared.begin(shot: o["shot"].map { Int(num($0)) })
+            return (200, jsonData(["shoot": true, "current": Shoot.shared.current?.n ?? 0]))
+        case ("POST", "/shoot/action"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            guard let a = o["action"] as? String else { return (400, jsonData(["error": "send {\"action\": \"watch|record|stop|again|skip|next|note|edit_shot|add_say\", \"shot\"?, \"text\"?}"])) }
+            Shoot.shared.perform(a, text: o["text"] as? String, shot: o["shot"].map { Int(num($0)) })
+            return (200, jsonData(["done": a, "current": Shoot.shared.current?.n ?? 0, "status": Shoot.shared.status]))
+        case ("GET", "/takes"):
+            return (200, Shoot.shared.takesJSON())
+        case ("GET", "/finish"):
+            return (200, jsonData(["markdown": Shoot.shared.finishPrompt(), "file": Shoot.shared.finishPath]))
         case ("GET", "/strokes"):
             if let d = FileManager.default.contents(atPath: strokesPath) { return (200, d) }
             return (404, jsonData(["error": "no strokes yet; POST /split"]))
@@ -567,7 +581,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }

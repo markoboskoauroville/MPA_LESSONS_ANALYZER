@@ -44,6 +44,7 @@ struct Cell: View {
 struct ContentView: View {
     @EnvironmentObject var s: Store
     @State private var showSettings = false
+    @ObservedObject private var shoot = Shoot.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -72,6 +73,7 @@ struct ContentView: View {
             TableView()
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $shoot.open) { ShootView().environmentObject(s) }
     }
 
     var topRow: some View {
@@ -98,6 +100,8 @@ struct ContentView: View {
             .labelsHidden().frame(width: 72).help("Language of the transcription")
             Divider().frame(height: 20)
             StepButton(n: "3", word: "Analyze", enabled: !s.segs.isEmpty) { s.analyze() }
+            Divider().frame(height: 20)
+            StepButton(n: "4", word: "SHOOT", enabled: !s.shots.isEmpty) { Shoot.shared.begin() }
             Spacer()
             Picker("", selection: $s.lessonOnly) {
                 Text("Lesson only").tag(true)
@@ -311,6 +315,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @AppStorage("exportFolder") private var exportFolder = (NSHomeDirectory() + "/Desktop")
     @AppStorage("voiceToTextPort") private var vtPort = 0
+    @AppStorage("webcamPort") private var wcPort = 0
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -335,6 +340,10 @@ struct SettingsView: View {
             Text("VOICE TO TEXT (MANTRA) PORT").font(.system(size: 10)).foregroundStyle(.secondary)
             TextField("0 = find it automatically", value: $vtPort, format: .number.grouping(.never)).frame(width: 140)
             Text("Step 2 sends the video to Voice to Text (Mantra)'s local API.").font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("WEBCAM RECORDER (MANTRA) PORT").font(.system(size: 10)).foregroundStyle(.secondary)
+            TextField("0 = find it automatically", value: $wcPort, format: .number.grouping(.never)).frame(width: 140)
+            Text("SHOOT records through Webcam Recorder's local API (Sony ILCE-7M5, vertical slice).").font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             Divider()
