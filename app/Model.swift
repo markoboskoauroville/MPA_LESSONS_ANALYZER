@@ -7,7 +7,7 @@ struct Seg: Identifiable, Equatable {
     var text: String
 }
 
-struct Section: Equatable {
+struct LessonSection: Equatable {
     var start: Double
     var end: Double
     var title: String
@@ -25,12 +25,12 @@ struct Remark: Equatable {
 struct Analysis: Equatable {
     var title = ""
     var lesson = ""
-    var sections: [Section] = []
+    var sections: [LessonSection] = []
     var remarks: [Remark] = []
 }
 
 enum Item: Identifiable {
-    case header(Int, Section)
+    case header(Int, LessonSection)
     case row(Seg, [Remark])
     var id: String {
         switch self {
@@ -53,7 +53,7 @@ func parseAnalysis(_ data: Data) -> Analysis? {
     a.title = o["title"] as? String ?? ""
     a.lesson = o["lesson"] as? String ?? ""
     for s in (o["sections"] as? [[String: Any]] ?? []) {
-        a.sections.append(Section(start: num(s["start"]), end: num(s["end"]),
+        a.sections.append(LessonSection(start: num(s["start"]), end: num(s["end"]),
                                   title: s["title"] as? String ?? "", code: s["code"] as? String ?? "",
                                   what: s["what"] as? String ?? "", shoot: s["shoot"] as? String ?? ""))
     }
