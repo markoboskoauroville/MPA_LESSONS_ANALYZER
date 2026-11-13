@@ -14,3 +14,7 @@ Marko: "use cclear buld plug in processor to be abel tu se au or vst but i also 
 ## 13.11.2026: Plugin Assistant, a Chrome extension (in parallel; its own repository)
 Marko: "The way they give me an idea, you need to build it now in parallel. This is a Chrome extension, a local one in developer mode, which actually takes audio, processes audio with plugins, and then sends it to my Video Ninja. This is kind of a plugin assistant. When it's on, I add a few plugins, and I see a UI similar to Bluecat Patchwork, basically the same, but it speeds up everything."
 **Status:** saved first (read as: new project "Plugin Assistant (Mantra)", repo PLUGIN_ASSISTANT: a Mac host app runs a live chain of AU plug-ins on the microphone (PatchWork-like rack) into a virtual device; an unpacked Chrome extension, when on, gives the classroom page (his "Video Ninja") the processed microphone and shows/edits the chain through the host's local API.)
+
+## 13.11.2026: lesson only
+Marko: "Please, you need to cut out from the transcription anything that's not related to the lesson. For even looking at it, every talk that's not related to the lesson, anything related to fixing classroom Zoom call technical issues or chit-chat about dogs and cats, just cut this out."
+**Status:** saved first (read as: the analysis marks off-topic time ranges ("cut"): classroom/call technique, sound checks, chit-chat; the Analyzer shows LESSON ONLY by default (cut rows hidden, a switch shows them), and a lesson-only transcript file is written next to the video.)
