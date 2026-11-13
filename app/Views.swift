@@ -331,6 +331,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @AppStorage("exportFolder") private var exportFolder = (NSHomeDirectory() + "/Desktop")
     @AppStorage("voiceToTextPort") private var vtPort = 0
+    @AppStorage("viewScreen") private var viewScreen = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -356,6 +357,11 @@ struct SettingsView: View {
             TextField("0 = find it automatically", value: $vtPort, format: .number.grouping(.never)).frame(width: 140)
             Text("Step 2 sends the video to Voice to Text (Mantra)'s local API.").font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Text("FULL-SCREEN VIEW ON").font(.system(size: 10)).foregroundStyle(.secondary)
+            Picker("", selection: $viewScreen) {
+                Text("The display with the menu bar (the BenQ)").tag("")
+                ForEach(WatchScreen.screenNames, id: \.self) { Text($0).tag($0) }
+            }.labelsHidden().frame(maxWidth: 360)
             Text("Camera and microphone are built in: the Sony (USB) first, the microphone of the Mac; POST /camera chooses others.").font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)

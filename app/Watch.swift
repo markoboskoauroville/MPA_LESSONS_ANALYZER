@@ -35,7 +35,13 @@ final class WatchScreen: ObservableObject {
     private var moveMon: Any?
     var shotN = 0
 
-    var screen: NSScreen { NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0] }
+    /// the display of the full-screen view: the one chosen in Settings or by POST /screen {"name"|"index"}; default the display with the menu bar (the BenQ)
+    var screen: NSScreen {
+        let want = UserDefaults.standard.string(forKey: "viewScreen") ?? ""
+        if !want.isEmpty, let s = NSScreen.screens.first(where: { $0.localizedName == want }) { return s }
+        return NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+    static var screenNames: [String] { NSScreen.screens.map { $0.localizedName } }
 
     /// The live Sony picture full screen, without recording (framing).
     func showLive(shot n: Int? = nil) {
@@ -128,7 +134,7 @@ final class WatchScreen: ObservableObject {
 
     func info() -> [String: Any] {
         let f = screen.frame
-        return ["mode": mode, "visible": visible, "shot": shotN, "recording": Shoot.shared.recording,
+        return ["mode": mode, "screens": WatchScreen.screenNames, "chosen": UserDefaults.standard.string(forKey: "viewScreen") ?? "", "visible": visible, "shot": shotN, "recording": Shoot.shared.recording,
                 "screen": screen.localizedName, "frame": [f.origin.x, f.origin.y, f.size.width, f.size.height]]
     }
 }

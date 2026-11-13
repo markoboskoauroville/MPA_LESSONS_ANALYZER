@@ -126,6 +126,7 @@ final class Shoot: ObservableObject {
         takes = (o["takes"] as? [[String: Any]] ?? []).map {
             Take(shot: Int(num($0["shot"])), path: $0["path"] as? String ?? "", duration: num($0["duration"]), kept: $0["kept"] as? Bool ?? false, note: $0["note"] as? String ?? "")
         }
+        takes.removeAll { !$0.path.isEmpty && !FileManager.default.fileExists(atPath: $0.path) }   // moved or deleted files do not linger
         skipped = Set((o["skipped"] as? [Any] ?? []).map { Int(num($0)) })
         for (k, v) in (o["edits"] as? [String: String] ?? [:]) { if let n = Int(k) { edits[n] = v } }
     }
@@ -142,6 +143,9 @@ final class Shoot: ObservableObject {
 
     func takesJSON() -> Data {
         loadTakes()
+        let n = takes.count
+        takes.removeAll { !$0.path.isEmpty && !FileManager.default.fileExists(atPath: $0.path) }
+        if takes.count != n { saveTakes() }
         return FileManager.default.contents(atPath: takesPath) ?? jsonData(["takes": [], "skipped": []])
     }
 
@@ -164,8 +168,13 @@ final class Shoot: ObservableObject {
         return stem
     }
     func takeTitle(_ s: Shot) -> String {
-        let k = takes.filter { $0.shot == s.n }.count + 1
-        return "\(lessonLabel) · shot \(s.n)" + (s.code.isEmpty ? "" : " · \(s.code)") + " · take \(k)"
+        let base = "\(lessonLabel) · shot \(s.n)" + (s.code.isEmpty ? "" : " · \(s.code)") + " · take "
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        var k = takes.filter { $0.shot == s.n }.count + 1
+        // the first free number: no listed take and no file in ~/Movies carries it
+        while takes.contains(where: { ($0.path as NSString).lastPathComponent == base + "\(k).mov" })
+                || FileManager.default.fileExists(atPath: movies.appendingPathComponent(base + "\(k).mov").path) { k += 1 }
+        return base + "\(k)"
     }
     var recSince: Date { recStart }
     @Published var cameraInfo = ""
@@ -224,10 +233,20 @@ final class Shoot: ObservableObject {
     func again(dry: Bool = false) {
         Task {
             if recording { await stopRecording() }
-            if !dry, let p = pending, let i = takes.firstIndex(where: { $0.path == p.path }) { takes[i].note += (takes[i].note.isEmpty ? "" : " ") + "(discarded)"; saveTakes() }
+            if !dry, let p = pending { deleteTake(path: p.path, trash: false) }
             if !dry { pending = nil }
             if let s = current { status = "Ready for take \(takes.filter { $0.shot == s.n }.count + 1) of shot \(s.n). Press RECORD."; WatchScreen.shared.showLive(shot: s.n) }
         }
+    }
+
+    /// removes a take from the list (and, with trash, moves its file to the Trash); the take numbers stay free
+    @discardableResult func deleteTake(path: String, trash: Bool) -> Bool {
+        guard let i = takes.firstIndex(where: { $0.path == path }) else { return false }
+        takes.remove(at: i)
+        if pending?.path == path { pending = nil }
+        if trash, FileManager.default.fileExists(atPath: path) { try? FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil) }
+        saveTakes()
+        return true
     }
 
     func keep() {

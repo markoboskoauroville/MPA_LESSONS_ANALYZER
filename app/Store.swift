@@ -702,6 +702,18 @@ final class Store: ObservableObject {
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
             Shoot.shared.again(dry: (o["dryRun"] as? Bool) ?? false)
             return (200, jsonData(["ok": true, "ready": true, "dryRun": (o["dryRun"] as? Bool) ?? false, "current": Shoot.shared.current?.n ?? 0]))
+        case ("POST", "/screen"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            var name = (o["name"] as? String) ?? ""
+            if o["index"] != nil { let i = Int(num(o["index"])); name = i == 0 ? "" : (WatchScreen.screenNames.indices.contains(i) ? WatchScreen.screenNames[i] : "") }
+            UserDefaults.standard.set(name, forKey: "viewScreen")
+            return (200, jsonData(WatchScreen.shared.info()))
+        case ("POST", "/takes/delete"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            guard let p = o["path"] as? String else { return (400, jsonData(["error": "send {path, trash?}"])) }
+            Shoot.shared.loadTakes()
+            let ok = Shoot.shared.deleteTake(path: p, trash: (o["trash"] as? Bool) ?? false)
+            return (ok ? 200 : 404, jsonData(["deleted": ok]))
         case ("GET", "/screen"):
             return (200, jsonData(WatchScreen.shared.info()))
         case ("POST", "/stop"):
@@ -750,7 +762,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /takes/add, POST /shot, POST /mute, GET /camera, POST /camera, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /screen, POST /takes/delete, POST /takes/add, POST /shot, POST /mute, GET /camera, POST /camera, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }
