@@ -163,7 +163,7 @@ struct WatchView: View {
             let showControls = (!playing && !w.live && !sh.recording) || ctx.date.timeIntervalSince(w.lastMove) < 3
             ZStack {
                 Color.black
-                if w.live || sh.recording { LiveView() } else { FullPlayer(player: st.player) }
+                if (w.live || sh.recording) && !sh.cameraMissing { LiveView() } else { FullPlayer(player: st.player) }
                 if sh.cameraMissing {
                     VStack(spacing: 16) {
                         Text("SONY NOT CONNECTED").font(.system(size: 64, weight: .bold)).foregroundStyle(.red)
