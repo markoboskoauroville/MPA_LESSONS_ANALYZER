@@ -23,3 +23,8 @@ Shooting assistant (Beatrice voice, Sony via Webcam Recorder, Resolve grade/trim
 - RECORD: prepareCamera() opens Webcam Recorder (Mantra) when its API is silent, chooses ILCE-7M5 vertical slice, waits for fps > 0, POST /record/start with the name "Lesson 12.11.2026 · shot N · CODE · take K"; STOP lists the take in <video>.takes.json with its path. NOT YET RUN (no test recordings).
 - LIVE (v7): POST /live shows the Sony's live picture (middle 9:16) full screen without recording; shown while recording with a REC dot and time. NOT PROVEN: in the first test the live view was black (Webcam Recorder was not running, Sony may need it streaming).
 - API added: GET /screen, POST /live, /record, /record/stop, /next, /again; /status has mode (idle|watch|live|record), recording, currentShot, recElapsed.
+
+## v8-v12 (13.11.2026)
+- Camera built in (Camera.swift, Recorder.swift, Slicer.swift copied from Webcam Recorder; no port 8867): Sony ILCE-7M5 first, vertical 9:16 slice, HEVC .mov with time code, file ~/Movies/<take name>.mov. SEEN: live picture of the Sony full screen on the BenQ, REC dot and time, a take file was created (by the tester) named "Lesson 12.11.2026 · shot 2 · TR01 · take 1.mov".
+- Mute (clips start muted, MUTE/UNMUTE in the full-screen group, POST /mute) and ducking while :8837 /speaking plays. Last video reopened at start. POST /takes/add, finish prompt (safe names, mp4 hvc1+aac, silence rule).
+- Second Take protocol: LAN listener :8966 (Bonjour _secondtake._tcp), private/Tailscale sources only, protocol actions only; NO pairing codes; first come first served by X-Remote-Id (423 {"busy","owner"}), 30 s silence or RELEASE (button, POST /release) frees it; loopback :8965 is the full local API and never locked. /status has controller.
