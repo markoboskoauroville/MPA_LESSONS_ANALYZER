@@ -113,6 +113,7 @@ final class Store: ObservableObject {
         guard let sh = analysis.shots.first(where: { $0.n == n }) else { return }
         if watchingShot == n { stopPlayback(); return }
         startQueue(sh.watch, shot: n)
+        WatchScreen.shared.show(shot: n)
     }
 
     func playAllClips() { if playingAll { stopPlayback() } else if let f = clips.first { playClip(f.n, all: true) } }
@@ -620,8 +621,11 @@ final class Store: ObservableObject {
             guard shots.contains(where: { $0.n == n }) else { return (404, jsonData(["error": "no shot \(n); GET /shots"])) }
             if watchingShot != n { watchShot(n) }
             return (200, jsonData(["watching": n]))
+        case ("GET", "/screen"):
+            return (200, jsonData(WatchScreen.shared.info()))
         case ("POST", "/stop"):
             stopPlayback()
+            if !Shoot.shared.recording { WatchScreen.shared.hide() }
             return (200, jsonData(["playing": false]))
         case ("POST", "/shoot/start"):
             guard videoURL != nil, !shots.isEmpty else { return (409, jsonData(["error": "open the video; the analysis needs shots"])) }
@@ -655,7 +659,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }
