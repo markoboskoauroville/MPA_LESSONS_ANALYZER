@@ -21,6 +21,9 @@ final class Store: ObservableObject {
     @Published var lang = ""
     @Published var strokes: [Stroke] = []
     @Published var playerReady = false
+    @Published var playerNote = ""
+    @Published var lessonSegs: [Seg]? = nil     // .transcript.json written by someone else with "lessonOnly": true: shown as it is
+    private var proxyProc: Process?
     @Published var lessonOnly: Bool = (UserDefaults.standard.object(forKey: "lessonOnly") as? Bool) ?? true {
         didSet { UserDefaults.standard.set(lessonOnly, forKey: "lessonOnly"); rebuild() }
     }
@@ -192,7 +195,58 @@ final class Store: ObservableObject {
 
     /// The player is attached to the view only when its item is ready (a portrait H.264 file showed just the QuickTime icon before).
     func attachVideo(_ url: URL) {
-        playerReady = false
+        playerReady = false; playerNote = "Checking the video..."
+        itemObs?.invalidate(); proxyProc?.terminate()
+        Task { [weak self] in
+            guard let self = self else { return }
+            let playable = await self.canPlay(url)
+            if playable { self.playerNote = ""; self.attachItem(url); return }
+            if let proxy = await self.makeProxy(url) { self.playerNote = ""; self.attachItem(proxy) }
+            else if self.playerNote.isEmpty || self.playerNote.hasPrefix("Preparing") { self.playerNote = "No playable picture: macOS cannot decode this video and the ffmpeg copy failed." }
+        }
+    }
+
+    /// AVFoundation can play H.264/HEVC + AAC; the class file from the browser is AV1 + Opus (a QuickTime icon, no picture).
+    private func canPlay(_ url: URL) async -> Bool {
+        let a = AVURLAsset(url: url)
+        guard (try? await a.load(.isPlayable)) == true else { return false }
+        guard let vt = try? await a.loadTracks(withMediaType: .video), let v = vt.first, (try? await v.load(.isDecodable)) == true else { return false }
+        if let at = try? await a.loadTracks(withMediaType: .audio) {
+            for t in at where (try? await t.load(.isDecodable)) != true { return false }
+        }
+        return true
+    }
+
+    /// A playback copy (H.264 + AAC, same timeline) in ~/Library/Caches, never next to the lesson file.
+    private func makeProxy(_ url: URL) async -> URL? {
+        let dir = NSHomeDirectory() + "/Library/Caches/MPA Lessons Analyzer"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let key = "\(attrs?[.size] as? Int ?? 0)-\(Int((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0))"
+        let out = URL(fileURLWithPath: dir + "/" + url.deletingPathExtension().lastPathComponent + "-" + key + ".proxy.mp4")
+        if FileManager.default.fileExists(atPath: out.path) { return out }
+        guard let ff = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            playerNote = "macOS cannot play this video (AV1/Opus) and ffmpeg is not installed."; return nil
+        }
+        playerNote = "Preparing a playback copy: this file is AV1 + Opus, which macOS cannot play. Once only."
+        let tmp = out.deletingLastPathComponent().appendingPathComponent("part-" + out.lastPathComponent)
+        try? FileManager.default.removeItem(at: tmp)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: ff)
+        p.arguments = ["-nostdin", "-y", "-v", "error", "-i", url.path, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+                       "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-f", "mp4", tmp.path]
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        proxyProc = p
+        let code: Int32 = await withCheckedContinuation { c in
+            p.terminationHandler = { c.resume(returning: $0.terminationStatus) }
+            do { try p.run() } catch { c.resume(returning: -1) }
+        }
+        proxyProc = nil
+        guard code == 0, (try? FileManager.default.moveItem(at: tmp, to: out)) != nil else { try? FileManager.default.removeItem(at: tmp); return nil }
+        return out
+    }
+
+    private func attachItem(_ url: URL) {
         itemObs?.invalidate()
         let item = AVPlayerItem(asset: AVURLAsset(url: url))
         itemObs = item.observe(\.status, options: [.initial, .new]) { [weak self] it, _ in
@@ -208,12 +262,17 @@ final class Store: ObservableObject {
     /// The full transcript is the source of truth; .transcript.json is derived from it with the analysis' cut ranges.
     func loadTranscripts() {
         let fm = FileManager.default
+        lessonSegs = nil
+        let lessonData = fm.contents(atPath: transcriptPath)
+        let lo = lessonData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let isLesson = lo?["lessonOnly"] as? Bool ?? false
         if let d = fm.contents(atPath: fullPath) { loadTranscript(d) }
-        else if let d = fm.contents(atPath: transcriptPath) {
+        else if let d = lessonData {
             loadTranscript(d)
-            let flag = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["lessonOnly"] as? Bool ?? false
-            if !flag { try? d.write(to: URL(fileURLWithPath: fullPath)) }
+            if !isLesson { try? d.write(to: URL(fileURLWithPath: fullPath)) }
         }
+        // a lesson-only file written by someone else (Claude, Queen) is shown as it is; the app's own copy is derived again
+        if isLesson, lo?["by"] as? String != "app", let d = lessonData { lessonSegs = parseSegs(d) }
     }
 
     func loadStrokes() {
@@ -225,16 +284,24 @@ final class Store: ObservableObject {
 
     /// Writes <video>.transcript.json = the full transcript without the rows that start inside a cut range.
     func writeLessonOnly() {
+        if let cur = FileManager.default.contents(atPath: transcriptPath),
+           let co = try? JSONSerialization.jsonObject(with: cur) as? [String: Any], co["lessonOnly"] as? Bool == true, co["by"] as? String != "app" { return }
         guard !segs.isEmpty, let d = FileManager.default.contents(atPath: fullPath),
               var o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let arr = o["segments"] as? [[String: Any]] else { return }
-        let kept = arr.enumerated().filter { hasAnalysis ? cutWhy(Seg(id: $0.offset, start: num($0.element["start"]), end: num($0.element["end"]), text: ""), analysis) == nil : true }.map { $0.element }
+        let kept = arr.enumerated().filter { hasAnalysis ? cutWhy(Seg(id: $0.offset, start: num($0.element["start"]), end: num($0.element["end"]), text: ""), analysis) == nil && !isHallucination($0.element["text"] as? String ?? "") : !isHallucination($0.element["text"] as? String ?? "") }.map { $0.element }
         o["segments"] = kept
         o["lessonOnly"] = hasAnalysis
+        o["by"] = "app"
         o["full"] = (fullPath as NSString).lastPathComponent
         if let j = try? JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys]) {
             try? j.write(to: URL(fileURLWithPath: transcriptPath))
         }
+    }
+
+    func parseSegs(_ d: Data) -> [Seg] {
+        guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let arr = o["segments"] as? [[String: Any]] else { return [] }
+        return arr.enumerated().map { Seg(id: $0.offset, start: num($0.element["start"]), end: num($0.element["end"]), text: $0.element["text"] as? String ?? "") }
     }
 
     func loadTranscript(_ d: Data) {
@@ -244,8 +311,15 @@ final class Store: ObservableObject {
         lang = o["language"] as? String ?? o["lang"] as? String ?? ""
     }
 
-    func rebuild() { items = buildItems(segs, analysis, strokes, lessonOnly: lessonOnly) }
-    var shownSegs: Int { lessonOnly && hasAnalysis ? segs.filter { cutWhy($0, analysis) == nil }.count : segs.count }
+    func rebuild() {
+        if lessonOnly, let l = lessonSegs { items = buildItems(l, analysis, strokes, lessonOnly: true, filterRows: false) }
+        else { items = buildItems(segs, analysis, strokes, lessonOnly: lessonOnly, filterRows: true) }
+    }
+    var shownSegs: Int {
+        if !lessonOnly { return segs.count }
+        if let l = lessonSegs { return l.count }
+        return segs.filter { !isHallucination($0.text) && (!hasAnalysis || cutWhy($0, analysis) == nil) }.count
+    }
 
     func pollAnalysis(force: Bool = false) {
         guard videoURL != nil else { return }

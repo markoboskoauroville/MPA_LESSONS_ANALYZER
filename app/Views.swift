@@ -16,9 +16,10 @@ struct StepButton: View {
                     .frame(width: 28, height: 28)
                     .overlay(Circle().stroke(enabled ? Color.orange : Color.gray.opacity(0.5), lineWidth: 1))
                     .scaleEffect(hover && enabled ? 1.15 : 1)
-                Text(word).underline(hover && enabled)
+                Text(word).underline(hover && enabled).lineLimit(1).fixedSize()
             }
             .foregroundStyle(enabled ? Color.primary : Color.gray)
+            .fixedSize()
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -63,7 +64,7 @@ struct ContentView: View {
             if s.videoURL != nil {
                 HStack(spacing: 0) {
                     if s.playerReady { PlayerPane(player: s.player).frame(maxWidth: s.clips.isEmpty ? .infinity : 360) }
-                    else { Text("Loading the video...").foregroundStyle(.secondary).frame(maxWidth: .infinity) }
+                    else { Text(s.playerNote.isEmpty ? "Loading the video..." : s.playerNote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(12).frame(maxWidth: .infinity) }
                     if !s.clips.isEmpty { Divider(); PlaylistView() }
                 }
                 .frame(height: 260)
@@ -88,26 +89,32 @@ struct ContentView: View {
     }
 
     var steps: some View {
-        HStack(spacing: 28) {
+        VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 20) {
             StepButton(n: "1", word: "Open", enabled: true) { s.chooseVideo() }
             Divider().frame(height: 20)
             StepButton(n: "2a", word: s.busy ? "Stop" : "Split voice/drums", enabled: s.videoURL != nil) { s.splitOrStop() }
             Divider().frame(height: 20)
             StepButton(n: "2", word: s.busy ? "Stop" : "Transcribe", enabled: s.videoURL != nil) { s.transcribeOrStop() }
-            Picker("", selection: $s.pickLang) {
-                ForEach(["en", "hr", "auto", "hi", "de", "es", "fr", "it", "ru"], id: \.self) { Text($0) }
-            }
-            .labelsHidden().frame(width: 72).help("Language of the transcription")
             Divider().frame(height: 20)
             StepButton(n: "3", word: "Analyze", enabled: !s.segs.isEmpty) { s.analyze() }
             Divider().frame(height: 20)
             StepButton(n: "4", word: "SHOOT", enabled: !s.shots.isEmpty) { Shoot.shared.begin() }
+            Spacer(minLength: 0)
+        }
+        HStack(spacing: 12) {
+            Text("Language").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
+            Picker("", selection: $s.pickLang) {
+                ForEach(["en", "hr", "auto", "hi", "de", "es", "fr", "it", "ru"], id: \.self) { Text($0) }
+            }
+            .labelsHidden().frame(width: 80).help("Language of the transcription")
             Spacer()
             Picker("", selection: $s.lessonOnly) {
                 Text("Lesson only").tag(true)
                 Text("Full").tag(false)
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 180)
+            .pickerStyle(.segmented).labelsHidden().frame(width: 200)
+        }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
     }

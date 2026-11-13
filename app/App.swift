@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 4
+let VERSION = 5
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -18,7 +18,7 @@ struct MPAApp: App {
         WindowGroup("MPA Lessons Analyzer (Mantra)") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 640, idealWidth: 1000, maxWidth: .infinity,
+                .frame(minWidth: 860, idealWidth: 1000, maxWidth: .infinity,
                        minHeight: 560, idealHeight: 820, maxHeight: .infinity)
         }
         .defaultSize(width: 1000, height: 820)

@@ -148,6 +148,11 @@ func fmtTime(_ t: Double) -> String {
     return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
 }
 
+/// A section whose whole range lies inside one cut range (e.g. "Setting up the classroom") is not part of the lesson.
+func sectionIsCut(_ s: LessonSection, _ a: Analysis) -> Bool {
+    a.cuts.contains { s.start >= $0.start - 1 && s.end <= $0.end + 1 }
+}
+
 func cutWhy(_ seg: Seg, _ a: Analysis) -> String? {
     for c in a.cuts where seg.start >= c.start && seg.start < c.end { return c.why.isEmpty ? "not the lesson" : c.why }
     return nil
@@ -166,7 +171,19 @@ func strokeSummary(_ strokes: [Stroke], _ start: Double, _ end: Double) -> Strin
     return "\(n)  " + order.compactMap { c in counts[c].map { "\(c)\($0)" } }.joined(separator: " ")
 }
 
-func buildItems(_ allSegs: [Seg], _ a: Analysis, _ strokes: [Stroke], lessonOnly: Bool) -> [Item] {
+/// Whisper's known inventions on silence and music.
+func isHallucination(_ text: String) -> Bool {
+    let t = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " .,!?-–—…\"'\n\t"))
+    if t.isEmpty { return true }
+    let exact: Set<String> = ["you", "thank you", "thanks", "bye", "bye-bye", "bye bye", "okay", "ok", "so", "thank you very much"]
+    if exact.contains(t) { return true }
+    let parts = ["thank you for watching", "thanks for watching", "please subscribe", "like and subscribe", "subscribe to", "subtitles by", "subtitled by",
+                 "amara.org", "amara", "transcribed by", "see you in the next video", "see you next time", "don't forget to subscribe",
+                 "sous-titres", "untertitel", "www.", ".com/", "captions by", "closed captioning", "mbc news"]
+    return parts.contains { t.contains($0) }
+}
+
+func buildItems(_ allSegs: [Seg], _ a: Analysis, _ strokes: [Stroke], lessonOnly: Bool, filterRows: Bool) -> [Item] {
     let segs = allSegs
     var assigned = [[Remark]](repeating: [], count: segs.count)
     if !segs.isEmpty {
@@ -180,12 +197,16 @@ func buildItems(_ allSegs: [Seg], _ a: Analysis, _ strokes: [Stroke], lessonOnly
     var si = 0
     for (i, s) in segs.enumerated() {
         let why = cutWhy(s, a)
-        if lessonOnly && why != nil { continue }
+        if lessonOnly && filterRows && (why != nil || isHallucination(s.text)) { continue }
         while si < a.sections.count && a.sections[si].start < s.end {
-            items.append(.header(si, a.sections[si])); si += 1
+            if !(lessonOnly && sectionIsCut(a.sections[si], a)) { items.append(.header(si, a.sections[si])) }
+            si += 1
         }
         items.append(.row(s, assigned[i], strokeSummary(strokes, s.start, s.end), why))
     }
-    while si < a.sections.count { items.append(.header(si, a.sections[si])); si += 1 }
+    while si < a.sections.count {
+        if !(lessonOnly && sectionIsCut(a.sections[si], a)) { items.append(.header(si, a.sections[si])) }
+        si += 1
+    }
     return items
 }
