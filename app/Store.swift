@@ -42,12 +42,30 @@ final class Store: ObservableObject {
     private var proc: Process?
 
     let player = AVPlayer()
+    /// clips start muted (remembered); the remote and the full-screen window toggle it
+    @Published var muted: Bool = (UserDefaults.standard.object(forKey: "clipMuted") as? Bool) ?? true {
+        didSet { UserDefaults.standard.set(muted, forKey: "clipMuted"); player.isMuted = muted }
+    }
+    private var ducked = false
+    /// while the Mac voice speaks (MANTRA_VOICE :8837 /speaking phase playing) the clip is silent, so two voices never overlap
+    private func pollVoice() {
+        guard let u = URL(string: "http://127.0.0.1:8837/speaking") else { return }
+        var r = URLRequest(url: u); r.timeoutInterval = 0.6
+        URLSession.shared.dataTask(with: r) { [weak self] d, _, _ in
+            let speaking = (d.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["phase"] as? String) == "playing"
+            Task { @MainActor in
+                guard let s = self, s.ducked != speaking else { return }
+                s.ducked = speaking; s.player.volume = speaking ? 0 : 1
+            }
+        }.resume()
+    }
     private var task: Task<Void, Never>?
     private var t0 = Date()
     private var ticker: Timer?
     private var analysisStamp: Date?
     private var timeObserver: Any?
     private let http = Http()
+    private let lan = Http()
 
     // MARK: playlist: clips are time codes of the original video; nothing is cut or exported
     var clips: [Clip] { analysis.clips }
@@ -153,6 +171,8 @@ final class Store: ObservableObject {
 
     init() {
         installKeys()
+        player.isMuted = muted
+        Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in Task { @MainActor in self?.pollVoice() } }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] t in
             Task { @MainActor in self?.now = t.seconds }
         }
@@ -184,6 +204,7 @@ final class Store: ObservableObject {
         guard FileManager.default.fileExists(atPath: url.path) else { error = "File not found: \(url.path)"; return false }
         task?.cancel(); busy = false; stopTicker()
         videoURL = url
+        UserDefaults.standard.set(url.path, forKey: "lastVideo")
         attachVideo(url)
         segs = []; analysis = Analysis(); hasAnalysis = false; analysisStamp = nil; error = ""; lang = ""; strokes = []
         loadTranscripts()
@@ -552,10 +573,18 @@ final class Store: ObservableObject {
                 try? "\(p)\n".write(toFile: NSHomeDirectory() + "/.mantra/ports/mpa-lessons-analyzer", atomically: true, encoding: .utf8)
             }
         }
-        http.handler = { method, path, body in
-            await MainActor.run { Store.shared.route(method, path, body) }
+        http.handler = { method, path, body, _ in
+            await MainActor.run { Store.shared.route(method, path, body, lan: false) }
         }
         http.start(8965)
+        lan.lan = true
+        lan.bonjour = "_secondtake._tcp"
+        lan.auth = { code in await MainActor.run { Pairing.shared.check(code) } }
+        lan.handler = { method, path, body, isLan in
+            await MainActor.run { Store.shared.route(method, path, body, lan: isLan) }
+        }
+        lan.start(8966)
+        if videoURL == nil, let p = UserDefaults.standard.string(forKey: "lastVideo"), FileManager.default.fileExists(atPath: p) { _ = open(URL(fileURLWithPath: p)) }
     }
 
     func status() -> [String: Any] {
@@ -566,11 +595,21 @@ final class Store: ObservableObject {
          "fullTranscriptFile": fullPath, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
          "remarks": analysis.remarks.count, "error": error, "lang": lang,
          "transcriptFile": videoURL == nil ? "" : transcriptPath, "analysisFile": videoURL == nil ? "" : analysisPath,
-         "exportFolder": exportFolder, "mode": WatchScreen.shared.mode, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
+         "exportFolder": exportFolder, "mode": WatchScreen.shared.mode, "muted": muted, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
     }
 
-    func route(_ method: String, _ path: String, _ body: Data) -> (Int, Data) {
+    func route(_ method: String, _ path: String, _ body: Data, lan: Bool = false) -> (Int, Data) {
         switch (method, path) {
+        case ("GET", "/status") where lan:
+            let sh = Shoot.shared
+            let n = sh.current?.n ?? 0
+            let k = sh.takes.filter { $0.shot == n }.count
+            return (200, jsonData(["protocol": 1, "name": "MPA Lessons Analyzer (Mantra)", "mode": WatchScreen.shared.mode, "shot": n, "shots": shots.count,
+                                   "takes": k, "take": k + 1, "elapsed": sh.recording ? Int(Date().timeIntervalSince(sh.recSince)) : 0,
+                                   "muted": muted, "recording": sh.recording, "cameraInfo": sh.cameraInfo, "status": sh.status]))
+        case ("GET", "/shots") where lan:
+            let c = shots.map { ["n": $0.n, "title": $0.title, "code": $0.code, "say": $0.say, "secs": $0.secs] as [String: Any] }
+            return (200, (try? JSONSerialization.data(withJSONObject: c)) ?? Data("[]".utf8))
         case ("GET", "/status"), ("GET", "/"):
             return (200, jsonData(status()))
         case ("POST", "/open"):
@@ -617,10 +656,28 @@ final class Store: ObservableObject {
         case ("POST", "/watch"):
             guard videoURL != nil else { return (409, jsonData(["error": "no video open"])) }
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
-            let n = Int(num(o["n"]))
+            let n = o["n"] != nil ? Int(num(o["n"])) : (Shoot.shared.current?.n ?? 0)
             guard shots.contains(where: { $0.n == n }) else { return (404, jsonData(["error": "no shot \(n); GET /shots"])) }
+            if Shoot.shared.recording { return (409, jsonData(["error": "recording"])) }
             if watchingShot != n { watchShot(n) }
             return (200, jsonData(["watching": n]))
+        case ("POST", "/shot"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            let n = Int(num(o["n"]))
+            guard shots.contains(where: { $0.n == n }) else { return (404, jsonData(["error": "no shot \(n)"])) }
+            if !Shoot.shared.recording { stopPlayback(); Shoot.shared.focus(shot: n) }
+            return (200, jsonData(["ok": true, "shot": Shoot.shared.current?.n ?? 0]))
+        case ("POST", "/mute"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            muted = (o["on"] as? Bool) ?? !muted
+            return (200, jsonData(["ok": true, "muted": muted]))
+        case ("GET", "/camera"):
+            return (200, jsonData(CameraEngine.shared.list()))
+        case ("POST", "/camera"):
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if let n = o["name"] as? String { CameraEngine.shared.wantedCamera = n }
+            if let m = o["mic"] as? String { CameraEngine.shared.wantedMic = m }
+            return (200, jsonData(CameraEngine.shared.list()))
         case ("POST", "/live"):
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
             if (o["on"] as? Bool) == false { if !Shoot.shared.recording { WatchScreen.shared.hide() } }
@@ -644,8 +701,8 @@ final class Store: ObservableObject {
         case ("GET", "/screen"):
             return (200, jsonData(WatchScreen.shared.info()))
         case ("POST", "/stop"):
-            stopPlayback()
-            if !Shoot.shared.recording { WatchScreen.shared.hide() }
+            if Shoot.shared.recording { Shoot.shared.toggleRecord() }
+            else { stopPlayback(); WatchScreen.shared.hide() }
             return (200, jsonData(["playing": false]))
         case ("POST", "/shoot/start"):
             guard videoURL != nil, !shots.isEmpty else { return (409, jsonData(["error": "open the video; the analysis needs shots"])) }
@@ -679,7 +736,7 @@ final class Store: ObservableObject {
             loadStrokes(); rebuild()
             return (200, jsonData(status()))
         default:
-            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
+            return (404, jsonData(["error": "GET /status, POST /open, POST /split, GET /strokes, GET /clips, POST /play, GET /shots, POST /watch, GET /screen, POST /live, POST /shot, POST /mute, GET /camera, POST /camera, POST /record, POST /record/stop, POST /next, POST /again, POST /shoot/start, POST /shoot/action, GET /takes, GET /finish, POST /stop, POST /transcribe, GET /transcript/full, GET /transcript, GET /analysis, POST /reload"]))
         }
     }
 }

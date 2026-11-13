@@ -82,6 +82,10 @@ struct ContentView: View {
             Text("MPA Lessons Analyzer (Mantra)").font(.headline)
             Text("v\(VERSION)").foregroundStyle(.secondary)
             Spacer()
+            if CameraEngine.permissionsMissing {
+                Button("PERMISSIONS") { CameraEngine.openPermissions() }.buttonStyle(.plain).foregroundStyle(Color.orange)
+                    .help("Camera or microphone is not allowed yet: opens the switch in System Settings")
+            }
             Button("Settings") { showSettings = true }.buttonStyle(.plain).foregroundStyle(.secondary)
             Button("OFF") { NSApp.terminate(nil) }.buttonStyle(.plain).foregroundStyle(.secondary)
         }
@@ -322,7 +326,6 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @AppStorage("exportFolder") private var exportFolder = (NSHomeDirectory() + "/Desktop")
     @AppStorage("voiceToTextPort") private var vtPort = 0
-    @AppStorage("webcamPort") private var wcPort = 0
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -348,9 +351,7 @@ struct SettingsView: View {
             TextField("0 = find it automatically", value: $vtPort, format: .number.grouping(.never)).frame(width: 140)
             Text("Step 2 sends the video to Voice to Text (Mantra)'s local API.").font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("WEBCAM RECORDER (MANTRA) PORT").font(.system(size: 10)).foregroundStyle(.secondary)
-            TextField("0 = find it automatically", value: $wcPort, format: .number.grouping(.never)).frame(width: 140)
-            Text("SHOOT records through Webcam Recorder's local API (Sony ILCE-7M5, vertical slice).").font(.callout).foregroundStyle(.secondary)
+            Text("Camera and microphone are built in: the Sony (USB) first, the microphone of the Mac; POST /camera chooses others.").font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             Divider()

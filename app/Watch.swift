@@ -3,42 +3,6 @@ import AVKit
 import AVFoundation
 import AppKit
 
-/// The Sony's live picture, only as a monitor (no file): the middle 9:16 strip, the same cut the vertical slice records.
-final class LivePreviewView: NSView {
-    private let session = AVCaptureSession()
-    private let layerP = AVCaptureVideoPreviewLayer()
-    var name = ""
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layer = CALayer(); layer?.backgroundColor = NSColor.black.cgColor; layer?.masksToBounds = true
-        layerP.session = session; layerP.videoGravity = .resizeAspectFill
-        layer?.addSublayer(layerP)
-        let devs = AVCaptureDevice.DiscoverySession(deviceTypes: [.external, .builtInWideAngleCamera], mediaType: .video, position: .unspecified).devices
-        if let d = devs.first(where: { $0.localizedName.contains("ILCE") }) ?? devs.first, let inp = try? AVCaptureDeviceInput(device: d) {
-            name = d.localizedName
-            session.beginConfiguration()
-            if session.canAddInput(inp) { session.addInput(inp) }
-            session.commitConfiguration()
-            DispatchQueue.global().async { [session] in session.startRunning() }
-        }
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override func layout() {
-        super.layout()
-        let h = bounds.height, w = h * 9 / 16
-        layerP.frame = NSRect(x: (bounds.width - w) / 2, y: 0, width: w, height: h)
-    }
-    func stop() { let s = session; DispatchQueue.global().async { s.stopRunning() } }
-    deinit { session.stopRunning() }
-}
-
-struct LiveView: NSViewRepresentable {
-    func makeNSView(context: Context) -> LivePreviewView { LivePreviewView(frame: .zero) }
-    func updateNSView(_ v: LivePreviewView, context: Context) {}
-    static func dismantleNSView(_ v: LivePreviewView, coordinator: ()) { v.stop() }
-}
-
 final class WatchWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -63,6 +27,8 @@ final class WatchScreen: ObservableObject {
     static let shared = WatchScreen()
     @Published var visible = false
     @Published var live = false
+    @Published var pairCode: String? = nil
+    private var pairOnly = false
     @Published var lastMove = Date()
     private var window: WatchWindow?
     private var keyMon: Any?
@@ -76,6 +42,7 @@ final class WatchScreen: ObservableObject {
         if let n = n { shotN = n } else if shotN == 0 { shotN = Shoot.shared.current?.n ?? 0 }
         live = true
         present()
+        Task { _ = await Shoot.shared.prepareCamera() }
     }
 
     func show(shot n: Int) {
@@ -105,10 +72,21 @@ final class WatchScreen: ObservableObject {
         installKeys()
     }
 
+    func showPair(_ code: String) {
+        pairCode = code
+        if !visible { pairOnly = true; live = false; present() }
+    }
+    func clearPair() {
+        pairCode = nil
+        if pairOnly { pairOnly = false; hide() }
+    }
+
     func hide() {
         guard visible else { return }
         window?.orderOut(nil)
+        pairCode = nil; pairOnly = false
         visible = false; live = false
+        CameraEngine.shared.stop()
         if let k = keyMon { NSEvent.removeMonitor(k); keyMon = nil }
         if let m = moveMon { NSEvent.removeMonitor(m); moveMon = nil }
     }
@@ -129,7 +107,7 @@ final class WatchScreen: ObservableObject {
 
     func watchAgain() { live = false; Store.shared.watchShot(shotN) }
 
-    var mode: String { Shoot.shared.recording ? "record" : (!visible ? "idle" : (live ? "live" : (Store.shared.watchingShot != nil || Store.shared.playingAll ? "watch" : "idle"))) }
+    var mode: String { Shoot.shared.recording ? "recording" : (!visible ? "idle" : (live ? "live" : (Store.shared.watchingShot != nil || Store.shared.playingAll ? "watch" : "idle"))) }
 
     private func installKeys() {
         if keyMon == nil {
@@ -173,6 +151,9 @@ struct WatchView: View {
             ZStack {
                 Color.black
                 if w.live || sh.recording { LiveView() } else { FullPlayer(player: st.player) }
+                if w.live && !sh.recording && !sh.cameraInfo.isEmpty {
+                    VStack { Spacer(); Text(sh.cameraInfo).font(.system(size: 18)).foregroundStyle(.white.opacity(0.6)).padding(.bottom, 220) }
+                }
                 if sh.recording {
                     VStack {
                         HStack(spacing: 10) {
@@ -207,6 +188,9 @@ struct WatchView: View {
                         if !sh.recording {
                             HStack(spacing: 36) {
                                 Button("WATCH AGAIN") { w.watchAgain() }.buttonStyle(.plain)
+                                Button { st.muted.toggle() } label: {
+                                    HStack(spacing: 8) { Image(systemName: st.muted ? "speaker.slash.fill" : "speaker.wave.2.fill"); Text(st.muted ? "UNMUTE" : "MUTE") }
+                                }.buttonStyle(.plain)
                                 Button("CLOSE  (Esc)") { w.escape() }.buttonStyle(.plain)
                             }
                             .font(.system(size: 20)).foregroundStyle(.white.opacity(0.7))
@@ -215,6 +199,16 @@ struct WatchView: View {
                     .opacity(showControls ? 1 : 0)
                     .animation(.easeInOut(duration: 0.3), value: showControls)
                     .padding(.horizontal, 48).padding(.bottom, 56)
+                }
+                if let code = w.pairCode {
+                    ZStack {
+                        Color.black.opacity(0.92)
+                        VStack(spacing: 28) {
+                            Text("A phone wants to connect").font(.system(size: 34)).foregroundStyle(.white.opacity(0.8))
+                            Text(code).font(.system(size: 220, weight: .bold, design: .monospaced)).foregroundStyle(.white)
+                            Text("Type this code on the phone").font(.system(size: 28)).foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
                 }
             }
         }

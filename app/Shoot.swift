@@ -146,23 +146,6 @@ final class Shoot: ObservableObject {
     }
 
     // MARK: Webcam Recorder API
-    func webcamPort() -> Int? {
-        let ud = UserDefaults.standard.integer(forKey: "webcamPort")
-        if ud > 0 { return ud }
-        if let t = try? String(contentsOfFile: NSHomeDirectory() + "/.mantra/ports/webcam-recorder", encoding: .utf8), let p = Int(t.trimmingCharacters(in: .whitespacesAndNewlines)) { return p }
-        if let d = FileManager.default.contents(atPath: NSHomeDirectory() + "/.config/mantra-ports.json"),
-           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
-            for (k, v) in o where k.lowercased().contains("webcam") { if let m = v as? [String: Any], let p = m["port"] as? Int { return p } }
-        }
-        if let t = try? String(contentsOfFile: NSHomeDirectory() + "/Downloads/API/APPS AND SERVERS.md", encoding: .utf8),
-           let r = t.range(of: "### Webcam Recorder") {
-            var sec = String(t[r.upperBound...])
-            if let e = sec.range(of: "\n### ") { sec = String(sec[..<e.lowerBound]) }
-            if let m = sec.range(of: "127\\.0\\.0\\.1:[0-9]+", options: .regularExpression) { return Int(sec[m].dropFirst(10)) }
-        }
-        return nil
-    }
-
     func call(_ port: Int, _ method: String, _ path: String, _ body: [String: Any]? = nil, timeout: Double = 20) async -> [String: Any]? {
         guard let url = URL(string: "http://127.0.0.1:\(port)\(path)") else { return nil }
         var r = URLRequest(url: url)
@@ -172,13 +155,6 @@ final class Shoot: ObservableObject {
         var o = (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:]
         o["_status"] = (resp as? HTTPURLResponse)?.statusCode ?? 0
         return o
-    }
-
-    func cameraMissing(_ why: String) {
-        let m = "Webcam Recorder's API is not answering (\(why)). Start Webcam Recorder (Mantra) with its API, or set its port in Settings."
-        log.append("camera: " + m)
-        tell("I cannot reach the camera program. Please start Webcam Recorder.")
-        status = m
     }
 
     /// "Lesson 12.11.2026" from the video name (the date in it), else the file stem.
@@ -192,69 +168,41 @@ final class Shoot: ObservableObject {
         return "\(lessonLabel) · shot \(s.n)" + (s.code.isEmpty ? "" : " · \(s.code)") + " · take \(k)"
     }
     var recSince: Date { recStart }
-    var cameraNote: String { cameraInfo }
     @Published var cameraInfo = ""
+    var currentTakePath = ""
 
-    /// Makes sure Webcam Recorder runs (opens it when its API is silent) and that the Sony is delivering frames. Returns an error text or nil.
+    /// Opens the built-in camera (the Sony first) and waits, bounded, until frames arrive. Returns an error text or nil.
     func prepareCamera() async -> String? {
-        var port = webcamPort()
-        var st: [String: Any]? = nil
-        if let p = port { st = await call(p, "GET", "/status", nil, timeout: 3) }
-        if st == nil {
-            cameraInfo = "Starting Webcam Recorder..."
-            let o = Process()
-            o.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            o.arguments = ["-g", "-a", "Webcam Recorder (Mantra)"]
-            try? o.run()
-            for _ in 0..<30 {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                port = webcamPort()
-                if let p = port, let r = await call(p, "GET", "/status", nil, timeout: 2) { st = r; break }
-            }
-        }
-        guard let p = port, let first = st else { return "Webcam Recorder (Mantra) does not answer. Open it, or set its port in Settings." }
-        var cur = first
-        let isSony = (cur["camera"] as? String ?? "").contains("ILCE")
-        if !(isSony && (cur["slice"] as? Bool ?? false)) {
-            guard let r = await call(p, "POST", "/camera", ["name": "ILCE-7M5", "slice": true]) else { return "Webcam Recorder did not answer when choosing the camera." }
-            if (r["_status"] as? Int ?? 0) >= 400 { return "The Sony is not in the camera list (\(r["error"] as? String ?? "refused")). Plug in the USB cable and switch the camera on." }
-            cur = r
-        }
-        // frames arriving: fps above zero, polled for up to 8 s
-        for i in 0..<16 {
-            if num(cur["fps"]) > 0 && (cur["waiting"] as? Bool ?? false) == false { cameraInfo = "Sony ready, \(Int(num(cur["fps"]))) fps"; return nil }
-            if i == 15 { break }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if let r = await call(p, "GET", "/status", nil, timeout: 3) { cur = r }
-        }
-        return "The Sony is chosen but delivers no frames (waiting for the camera). Check the USB cable and that the camera is on."
+        cameraInfo = "Opening the camera..."
+        if let e = await CameraEngine.shared.start() { cameraInfo = e; status = e; return e }
+        if let e = await CameraEngine.shared.waitForFrames() { cameraInfo = e; status = e; return e }
+        cameraInfo = "\(CameraEngine.shared.cameraName) · sound: \(CameraEngine.shared.micName)"
+        return nil
     }
 
     func focus(shot n: Int) { if let i = shots.firstIndex(where: { $0.n == n }) { index = i } }
 
     func startRecording() async {
         guard let s = current, !recording else { return }
-        if let err = await prepareCamera() { log.append("camera: " + err); status = err; await speak("The camera is not ready."); return }
-        guard let port = webcamPort() else { cameraMissing("no port found"); return }
-        guard let r = await call(port, "POST", "/record/start", ["name": takeTitle(s)]) else { cameraMissing("no connection on port \(port)"); return }
-        if (r["_status"] as? Int ?? 0) >= 400 { cameraMissing("record/start: \(r["error"] as? String ?? "refused")"); return }
+        if let err = await prepareCamera() { log.append("camera: " + err); await speak("The camera is not ready."); return }
+        let (url, err) = await CameraEngine.shared.startRecord(title: takeTitle(s))
+        guard let u = url else { status = err; log.append("record: " + err); return }
+        currentTakePath = u.path
         recording = true; recStart = Date()
         status = "Recording shot \(s.n)."
         WatchScreen.shared.showLive(shot: s.n)
     }
 
     func stopRecording() async {
-        guard recording, let s = current, let port = webcamPort() else { return }
-        guard let r = await call(port, "POST", "/record/stop", nil, timeout: 60) else { cameraMissing("no answer to record/stop"); recording = false; return }
+        guard recording, let s = current else { return }
+        let (p, d, err) = await CameraEngine.shared.stopRecord()
         recording = false
-        let path = r["path"] as? String ?? ""
-        let dur = r["duration"].map { num($0) } ?? Date().timeIntervalSince(recStart)
-        guard !path.isEmpty else { status = "Webcam Recorder gave no file path: \(r["error"] as? String ?? "?")"; return }
-        let t = Take(shot: s.n, path: path, duration: dur, kept: false, note: "")
+        guard let path = p else { status = "The take failed: \(err)"; return }
+        let t = Take(shot: s.n, path: path, duration: d, kept: false, note: "")
         takes.append(t); pending = t; saveTakes()
-        log.append("take \(s.n): \(path) (\(Int(dur)) s)")
-        status = "Take saved, \(Int(dur.rounded())) seconds: \((path as NSString).lastPathComponent)"
-        if open { await speak("Take saved, \(Int(dur.rounded())) seconds. Keep it, or again?") }
+        log.append("take \(s.n): \(path) (\(Int(d)) s)")
+        status = "Take saved, \(Int(d.rounded())) seconds: \((path as NSString).lastPathComponent)"
+        if open { await speak("Take saved, \(Int(d.rounded())) seconds. Keep it, or again?") }
     }
 
     // MARK: actions
