@@ -376,7 +376,7 @@ struct SettingsView: View {
                 Text("Built-in webcam capture (the Sony over USB Streaming)").tag("webcam")
             }.labelsHidden().frame(maxWidth: 460)
             Text(capture == "webcam" ? "Camera and microphone are built in: the Sony (USB) first, the microphone of the Mac; POST /camera chooses others."
-                 : "RECORD and STOP press the Sony's record button through Imaging Edge Remote (sonycam); its window is shown full screen here; the Mac's microphone writes a small guide track per take.")
+                 : "RECORD brings Imaging Edge Remote to the front on the MacBook screen (Rectangle, never full screen) and presses the Sony's record button (sonycam); after the take Remote goes to the other screen and Second Take comes back. The Mac's microphone writes a small guide track per take.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             Divider()

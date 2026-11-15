@@ -6,7 +6,7 @@ V=$(sed -n 's/^let VERSION = \([0-9]*\)/\1/p' app/App.swift)
 NAME="MPA Lessons Analyzer (Mantra)"
 APP="build/$NAME.app"
 mkdir -p build; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -framework AVKit -framework AVFoundation -framework AppKit -framework Network -framework CoreImage -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework ScreenCaptureKit -o "$APP/Contents/MacOS/MPALessonsAnalyzer" app/*.swift
+swiftc -O -swift-version 5 -framework AVKit -framework AVFoundation -framework AppKit -framework Network -framework CoreImage -framework CoreMedia -framework CoreVideo -framework VideoToolbox -o "$APP/Contents/MacOS/MPALessonsAnalyzer" app/*.swift
 swiftc -O -swift-version 5 -framework AVFoundation -framework AudioToolbox -framework Accelerate -o build/drumsplit drumsplit/main.swift
 codesign --force -s "${SIGN:-Mantra Apps}" -i community.auroville.drumsplit build/drumsplit
 cp build/drumsplit "$APP/Contents/MacOS/drumsplit"

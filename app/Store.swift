@@ -696,7 +696,7 @@ final class Store: ObservableObject {
             return (200, jsonData(CameraEngine.shared.list()))
         case ("POST", "/live"):
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
-            if (o["on"] as? Bool) == false { if !Shoot.shared.recording { WatchScreen.shared.hide() } }
+            if (o["on"] as? Bool) == false { if !Shoot.shared.recording { WatchScreen.shared.hide(); Task { await SonyRemote.shared.sendAway() } } }
             else { stopPlayback(); WatchScreen.shared.showLive(shot: o["shot"].map { Int(num($0)) }) }
             return (200, jsonData(WatchScreen.shared.info()))
         case ("POST", "/record"), ("POST", "/record/start"):
@@ -743,7 +743,7 @@ final class Store: ObservableObject {
             return (200, jsonData(WatchScreen.shared.info()))
         case ("POST", "/stop"):
             if Shoot.shared.recording { Shoot.shared.toggleRecord() }
-            else { stopPlayback(); WatchScreen.shared.hide() }
+            else { stopPlayback(); WatchScreen.shared.hide(); Task { await SonyRemote.shared.sendAway() } }
             return (200, jsonData(["playing": false]))
         case ("POST", "/shoot/start"):
             guard videoURL != nil, !shots.isEmpty else { return (409, jsonData(["error": "open the video; the analysis needs shots"])) }

@@ -42,10 +42,18 @@ final class WatchScreen: ObservableObject {
         return NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
     }
     static var screenNames: [String] { NSScreen.screens.map { $0.localizedName } }
+    /// almost-maximized, as Rectangle's almost-maximize: the visible frame less 5 % around
+    var frameOnScreen: NSRect { let v = screen.visibleFrame; return v.insetBy(dx: v.width * 0.025, dy: v.height * 0.025) }
 
     /// The live Sony picture full screen, without recording (framing).
     func showLive(shot n: Int? = nil) {
         if let n = n { shotN = n } else if shotN == 0 { shotN = Shoot.shared.current?.n ?? 0 }
+        // v26: by remote control the "live picture" is the real Imaging Edge Remote, brought to the front (sonycam front)
+        if Capture.remote {
+            Shoot.shared.focus(shot: shotN)
+            Task { if await Shoot.shared.prepareRemote() == nil { await SonyRemote.shared.bringFront() } }
+            return
+        }
         live = true
         present()
         Task {
@@ -67,16 +75,17 @@ final class WatchScreen: ObservableObject {
 
     private func present() {
         if window == nil {
-            let w = WatchWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            w.isOpaque = true; w.backgroundColor = .black; w.hasShadow = false
-            w.level = .screenSaver
-            w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            // v26: a normal window, almost the whole visible area (menu bar, Dock and other apps stay reachable), never full screen
+            let w = WatchWindow(contentRect: frameOnScreen, styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            w.isOpaque = true; w.backgroundColor = .black
+            w.title = "Second Take"; w.titleVisibility = .hidden; w.titlebarAppearsTransparent = true
+            w.level = .normal
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: WatchView())
             window = w
         }
         guard let w = window else { return }
-        w.setFrame(screen.frame, display: true)
+        if !w.isVisible { w.setFrame(frameOnScreen, display: true) }
         w.orderFrontRegardless()
         w.makeKey()
         NSApp.activate(ignoringOtherApps: true)
@@ -94,22 +103,13 @@ final class WatchScreen: ObservableObject {
         if pairOnly { pairOnly = false; hide() }
     }
 
-    /// v23: while sonycam clicks in Imaging Edge Remote this window lets every click through (it may lie over Remote's window)
-    func passClicks(_ on: Bool) { window?.ignoresMouseEvents = on }
-    /// after a click in Remote: this window and app are in front again (keys, Esc)
-    func refront() {
-        guard visible, let w = window else { return }
-        w.orderFrontRegardless(); w.makeKey()
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func hide() {
+    func hide(keepPolling: Bool = false) {
         guard visible else { return }
         window?.orderOut(nil)
         pairCode = nil; pairOnly = false
         visible = false; live = false
         CameraEngine.shared.stop()
-        SonyRemote.shared.stopView(); SonyRemote.shared.stopPolling()
+        if !keepPolling && !Shoot.shared.recording { SonyRemote.shared.stopPolling() }
         if let k = keyMon { NSEvent.removeMonitor(k); keyMon = nil }
         if let m = moveMon { NSEvent.removeMonitor(m); moveMon = nil }
     }
@@ -174,7 +174,7 @@ struct WatchView: View {
             let showControls = (!playing && !w.live && !sh.recording) || ctx.date.timeIntervalSince(w.lastMove) < 3
             ZStack {
                 Color.black
-                if (w.live || sh.recording) && !sh.cameraMissing { if Capture.remote { RemoteLiveView() } else { LiveView() } } else { FullPlayer(player: st.player) }
+                if (w.live || sh.recording) && !sh.cameraMissing && !Capture.remote { LiveView() } else { FullPlayer(player: st.player) }
                 if sh.cameraMissing {
                     VStack(spacing: 16) {
                         Text(Capture.remote ? "CAMERA NOT CONNECTED" : "SONY NOT CONNECTED").font(.system(size: 64, weight: .bold)).foregroundStyle(.red)
@@ -187,9 +187,6 @@ struct WatchView: View {
                         if let c = sh.shots.first(where: { $0.n == w.shotN }) {
                             Text(sh.sayText(c)).font(.system(size: 22)).foregroundStyle(.white.opacity(0.75)).multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 1100)
-                        }
-                        if !remote.picture && !remote.pictureError.isEmpty {
-                            Text(remote.pictureError).font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange).multilineTextAlignment(.center).frame(maxWidth: 1100)
                         }
                         Spacer()
                     }

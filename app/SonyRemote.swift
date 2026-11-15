@@ -1,14 +1,14 @@
 // v23 (15.11.2026, Marko: "we are not recording with web camera, we are recording by remote control. That's the only change"):
 // the take is recorded on the Sony α7 V body. RECORD/STOP drive the existing hand `sonycam start|stop` (MACRO_SKILLS tools/sonycam,
 // Imaging Edge Remote over USB); its REC/STBY and time counter (AX text of Remote's live window, `sonycam status`) are mirrored here;
-// the live view is Remote's own window, captured with ScreenCaptureKit (one window, as OBS's window capture; the capture calls are
-// Macro Recorder's Capture.swift) and shown full screen in Second Take; the Mac's microphone writes a small AAC guide track per take
+// v26 (Marko: "Simply put in front the original program while we are recording and then put it on the second when we don't need it.
+// Use Rectangle"): no copy of Remote's window any more; `sonycam front` brings the real Remote to the front on the MacBook screen,
+// almost-maximized (never full screen), `sonycam away` sends it to the other screen. The Mac's microphone writes a small AAC guide track per take
 // (~/Movies/<take>.guide.m4a) for the transcription, the exercise check and the match with the camera clip afterwards
 // (tools/secondtake-match: start times, then audio cross-correlation).
 import Foundation
 import AVFoundation
 import AppKit
-import ScreenCaptureKit
 import CoreMedia
 import SwiftUI
 
@@ -16,14 +16,11 @@ enum Capture {
     /// "remote" (default since v23): the Sony records on its card by remote control; "webcam": the built-in capture of v8-v22
     static var remote: Bool { (UserDefaults.standard.string(forKey: "capture") ?? "remote") != "webcam" }
     static func set(remote: Bool) { UserDefaults.standard.set(remote ? "remote" : "webcam", forKey: "capture") }
-    static var screenAllowed: Bool { CGPreflightScreenCaptureAccess() }
     static var micAllowed: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
-    static var permissionsMissing: Bool { remote ? (!screenAllowed || !micAllowed) : CameraEngine.permissionsMissing }
+    static var permissionsMissing: Bool { remote ? !micAllowed : CameraEngine.permissionsMissing }
     static func openPermissions() {
         guard remote else { CameraEngine.openPermissions(); return }
-        // the first press puts Second Take into the Screen Recording list (macOS asks Marko once); the pane opens either way
-        if !screenAllowed { _ = CGRequestScreenCaptureAccess() }
-        let pane = !screenAllowed ? "Privacy_ScreenCapture" : "Privacy_Microphone"
+        let pane = "Privacy_Microphone"
         if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(u) }
     }
 }
@@ -64,22 +61,11 @@ final class SonyRemote: NSObject, ObservableObject {
     /// "?" not read yet, "NONE" no live view in Remote, "STBY", "REC"
     @Published var state = "?"
     @Published var counter = "00:00:00"
-    @Published var picture = false          // frames of Remote's window are arriving
-    @Published var pictureError = ""
     @Published var lastLine = ""
-    let layer = AVSampleBufferDisplayLayer()
-    private var stream: SCStream?
-    private let output = WindowFrames()
+    @Published var inFront = false          // Remote was brought to the front for a take (sonycam front)
     private var pollTask: Task<Void, Never>?
     private(set) var busy = false           // a sonycam click is running: polling waits
 
-    override init() {
-        super.init()
-        layer.videoGravity = .resizeAspect
-        layer.backgroundColor = NSColor.black.cgColor
-        output.layer = layer
-        output.onFrame = { [weak self] in Task { @MainActor in if self?.picture == false { self?.picture = true } } }
-    }
 
     var counterSeconds: Int {
         let p = counter.split(separator: ":").compactMap { Int($0) }
@@ -123,17 +109,34 @@ final class SonyRemote: NSObject, ObservableObject {
         if !busy { parse(out) }
     }
 
-    /// a click through sonycam: Second Take's full-screen window lets the click through (it may lie over Remote's window),
-    /// then Second Take takes the front back
+    /// a click through sonycam (it fronts Remote itself and clicks the record button found by Accessibility)
     func click(_ arg: String) async -> (Int32, String) {
         busy = true
-        WatchScreen.shared.passClicks(true)
         let r = await Self.run(arg)
-        WatchScreen.shared.passClicks(false)
         busy = false
         parse(r.1)
-        WatchScreen.shared.refront()
         return r
+    }
+
+    /// the real Remote in front on the MacBook screen, almost-maximized by Rectangle; Second Take's own windows step back
+    func bringFront() async {
+        WatchScreen.shared.hide(keepPolling: true)
+        busy = true
+        let (code, out) = await Self.run("front")
+        busy = false
+        inFront = code == 0
+        lastLine = out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Remote to the other screen, Second Take back in front (its main window, never full screen)
+    func sendAway() async {
+        guard inFront else { return }
+        busy = true
+        _ = await Self.run("away")
+        busy = false
+        inFront = false
+        NSApp.activate(ignoringOtherApps: true)
+        for w in NSApp.windows where w.isVisible && !(w is WatchWindow) { w.makeKeyAndOrderFront(nil) }
     }
 
     /// polling every second while the full-screen view is up (mirrors REC and the counter; a REC or STOP pressed on the camera
@@ -142,6 +145,8 @@ final class SonyRemote: NSObject, ObservableObject {
         guard pollTask == nil else { return }
         pollTask = Task { @MainActor in
             while !Task.isCancelled {
+                let sh = Shoot.shared
+                if !sh.open && !sh.recording && !self.inFront { self.pollTask = nil; return }
                 await self.poll()
                 await Shoot.shared.cameraStateChanged(self.state)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -150,85 +155,8 @@ final class SonyRemote: NSObject, ObservableObject {
     }
     func stopPolling() { pollTask?.cancel(); pollTask = nil }
 
-    // MARK: the picture: Remote's live window by ScreenCaptureKit
-    func startView() async {
-        guard stream == nil else { return }
-        guard Capture.screenAllowed else {
-            pictureError = "SCREEN RECORDING IS NOT ALLOWED for Second Take: System Settings, Privacy & Security, Screen Recording."
-            _ = CGRequestScreenCaptureAccess()          // adds the app to the list; Marko switches it on himself
-            return
-        }
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) else {
-            pictureError = "ScreenCaptureKit gave no answer."; return
-        }
-        // Remote's live window is the big one (the device list is smaller, 800 wide at most)
-        let wins = content.windows.filter { $0.owningApplication?.bundleIdentifier == "com.sony.Remote" && $0.windowLayer == 0 && $0.frame.width >= 300 }
-        guard let w = wins.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
-            pictureError = "Imaging Edge Remote has no window open."; return
-        }
-        let f = SCContentFilter(desktopIndependentWindow: w)
-        let cfg = SCStreamConfiguration()
-        let s = CGFloat(f.pointPixelScale)
-        cfg.width = max(2, Int(f.contentRect.width * s)); cfg.height = max(2, Int(f.contentRect.height * s))
-        cfg.minimumFrameInterval = CMTime(value: 1, timescale: 30)
-        cfg.showsCursor = false
-        cfg.ignoreShadowsSingleWindow = true
-        cfg.queueDepth = 4
-        let st = SCStream(filter: f, configuration: cfg, delegate: output)
-        do {
-            try st.addStreamOutput(output, type: .screen, sampleHandlerQueue: output.queue)
-            try await st.startCapture()
-            stream = st; pictureError = ""
-        } catch { pictureError = "The Remote window cannot be captured: \(error.localizedDescription)" }
-    }
-
-    func stopView() {
-        let st = stream; stream = nil; picture = false
-        Task { try? await st?.stopCapture() }
-        layer.flushAndRemoveImage()
-    }
-
     func info() -> [String: Any] {
-        ["state": state, "counter": counter, "picture": picture, "pictureError": pictureError, "line": lastLine,
-         "screenRecordingAllowed": Capture.screenAllowed, "micAllowed": Capture.micAllowed]
+        ["state": state, "counter": counter, "line": lastLine, "inFront": inFront, "micAllowed": Capture.micAllowed]
     }
 }
 
-/// receives the frames of the captured window and shows the complete ones
-final class WindowFrames: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "secondtake.remotewindow")
-    var layer: AVSampleBufferDisplayLayer?
-    var onFrame: (() -> Void)?
-    private var told = false
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, sb.isValid,
-              let a = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-              let raw = a.first?[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete else { return }
-        if let m = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: true) as? [NSMutableDictionary] {
-            m.first?.setValue(true, forKey: kCMSampleAttachmentKey_DisplayImmediately as String)
-        }
-        layer?.enqueue(sb)
-        if !told { told = true; onFrame?() }
-    }
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
-        told = false
-        Task { @MainActor in SonyRemote.shared.picture = false; SonyRemote.shared.pictureError = "The Remote window capture stopped: \(error.localizedDescription)" }
-    }
-}
-
-final class RemoteHostView: NSView {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layer = CALayer(); layer?.backgroundColor = NSColor.black.cgColor
-        MainActor.assumeIsolated { layer?.addSublayer(SonyRemote.shared.layer) }
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override func layout() { super.layout(); MainActor.assumeIsolated { SonyRemote.shared.layer.frame = bounds } }
-}
-
-struct RemoteLiveView: NSViewRepresentable {
-    func makeNSView(context: Context) -> RemoteHostView { RemoteHostView(frame: .zero) }
-    func updateNSView(_ v: RemoteHostView, context: Context) {}
-}

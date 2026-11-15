@@ -337,7 +337,8 @@ final class Shoot: ObservableObject {
 
     func watch() {
         guard let s = current else { return }
-        store.watchShot(s.n)
+        if Capture.remote && SonyRemote.shared.inFront && !recording { Task { await SonyRemote.shared.sendAway(); store.watchShot(s.n) } }
+        else { store.watchShot(s.n) }
         // v23: a shot from the lesson plan has no clip in the class: the screen shows its title and text
         status = s.watch.isEmpty ? "Shot \(s.n) is from the lesson plan, there is no clip of it in the class: \(sayText(s))" : "Watching the source clips of shot \(s.n)."
     }
@@ -579,7 +580,7 @@ final class Shoot: ObservableObject {
 extension Shoot {
     func iso(_ d: Date) -> String { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f.string(from: d) }
 
-    /// the camera answers in Imaging Edge Remote (connect once, at most every 30 s); the window picture and the REC mirror start
+    /// the camera answers in Imaging Edge Remote (connect once, at most every 30 s); the REC mirror starts
     func prepareRemote() async -> String? {
         let r = SonyRemote.shared
         if cameraInfo.isEmpty || cameraMissing { cameraInfo = "Reading the camera (Imaging Edge Remote)..." }
@@ -597,9 +598,8 @@ extension Shoot {
             return e
         }
         cameraMissing = false
-        await r.startView()
         r.startPolling()
-        cameraInfo = "Sony α7 V by remote control · \(r.state) · guide sound: Mac microphone" + (r.pictureError.isEmpty ? "" : "\n" + r.pictureError)
+        cameraInfo = "Sony α7 V by remote control · \(r.state) · guide sound: Mac microphone"
         return nil
     }
 
@@ -618,6 +618,7 @@ extension Shoot {
             return
         }
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined { _ = await AVCaptureDevice.requestAccess(for: .audio) }
+        if !r.inFront { await r.bringFront() }          // v26: the real Remote in front on the MacBook screen while recording
         let title = takeTitle(s)
         let g = GuideTrack()
         if let e = g.start(title: title) { log.append("guide track: " + e) }      // the camera take matters more: go on without it
@@ -626,6 +627,7 @@ extension Shoot {
         guard r.state == "REC" else {
             let (gp, _) = g.stop()
             if let gp { try? FileManager.default.removeItem(atPath: gp) }
+            await r.sendAway()
             status = "The camera did not start recording. \(r.lastLine)"
             log.append("record: " + r.lastLine)
             await speak("The camera did not start.")
@@ -637,7 +639,6 @@ extension Shoot {
         recording = true; setRecStart(camStartDate ?? Date())
         status = "Recording shot \(s.n) on the camera."
         log.append("REC shot \(s.n) at \(iso(camStartDate ?? Date()))")
-        WatchScreen.shared.showLive(shot: s.n)
     }
 
     /// click = press STOP through Remote (false: the camera stopped already, by hand or by itself)
@@ -662,6 +663,7 @@ extension Shoot {
             return
         }
         status = "Take saved on the camera, \(Int(secs.rounded())) seconds."
+        await r.sendAway()                              // v26: Remote to the other screen, Second Take in front for KEEP / AGAIN
         if open { await speak("Take saved, \(Int(secs.rounded())) seconds. Keep it, or again?") }
         if let gp = p { Task { await self.checkWords(gp) } }
     }
@@ -672,7 +674,7 @@ extension Shoot {
         if recording, st == "STBY", let s = current {
             log.append("the camera stopped (by hand or by itself): the take is closed")
             await stopRemote(s, click: false)
-        } else if !recording, st == "REC", WatchScreen.shared.visible, WatchScreen.shared.live, let s = current {
+        } else if !recording, st == "REC", open || SonyRemote.shared.inFront, let s = current {
             remoteBusy = true; defer { remoteBusy = false }
             let g = GuideTrack()
             if let e = g.start(title: takeTitle(s)) { log.append("guide track: " + e) }
