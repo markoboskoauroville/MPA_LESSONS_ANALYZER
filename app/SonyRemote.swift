@@ -21,6 +21,8 @@ enum Capture {
     static var permissionsMissing: Bool { remote ? (!screenAllowed || !micAllowed) : CameraEngine.permissionsMissing }
     static func openPermissions() {
         guard remote else { CameraEngine.openPermissions(); return }
+        // the first press puts Second Take into the Screen Recording list (macOS asks Marko once); the pane opens either way
+        if !screenAllowed { _ = CGRequestScreenCaptureAccess() }
         let pane = !screenAllowed ? "Privacy_ScreenCapture" : "Privacy_Microphone"
         if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(u) }
     }
