@@ -1,0 +1,12 @@
+#!/bin/bash
+# second_take_ready [--play-dry]: read-only "is everything ready for the Second Take" check (15.11.2026).
+# Plays and records NOTHING. Prints one line per check. --play-dry only says what "play first take" would open.
+FIRST="$HOME/Downloads/MPA Academy Classroom 12.11.2026.mp4"
+if [ "$1" = "--play-dry" ]; then
+  [ -f "$FIRST" ] && echo "DRY-RUN: would open in QuickTime, paused at 0:00, on the MacBook screen: $FIRST" || echo "FAIL first take file missing: $FIRST"; exit 0; fi
+[ -f "$FIRST" ] && echo "PASS first take file: $FIRST" || echo "FAIL first take file missing"
+echo "INFO $(sonycam status 2>&1 | head -1)"
+echo "INFO Mac input: $(SwitchAudioSource -c -t input 2>&1), volume $(osascript -e 'input volume of (get volume settings)')"
+echo "INFO Remote battery label: $(macro ax-read Remote 2>/dev/null | grep -o '"label":"[0-9]*%"' | head -1)"
+curl -s -m3 127.0.0.1:8837/speaking >/dev/null 2>&1 && echo "PASS voice API up" || echo "WARN voice API silent"
+echo "INFO free disk: $(df -h / | tail -1 | awk '{print $4}')"
