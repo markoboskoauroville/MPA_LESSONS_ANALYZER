@@ -41,3 +41,23 @@ running and a scripted DRX grade there is crash-prone.
 ## State at close, 13.11.2026
 
 Second Take v5-v22 closed 13.11.2026: first come first served controller (423, RELEASE), no pairing, LAN limited to private/Tailscale; AGAIN only readies the next take; FINISH runs tools/secondtake-finish (trim, H.265 vertical export, verify, LESSON_DRAFT) as a subprocess; no silent camera fallback (SONY NOT CONNECTED screen, 409 on RECORD); 4K preset when the camera offers it; v21 recovers orphan takes and refuses quit while recording; tools/rehearsal_test is the reusable PASS/FAIL rehearsal. Waiting for Marko: the real shoot tomorrow (Sony on, USB Streaming, white balance 3200-3800 K, mic gain 50-60 %, checklist on the Desktop).
+
+## v23-v25 (15.11.2026): the second take records on the Sony's card, by remote control
+Marko: "Only thing which is changing that we are not recording with web camera, we are recording by remote control." Everything else (guide, clips, Beatrice, TALK, Queen, the remote, FINISH) is unchanged.
+- **Capture** (Settings > RECORDING, UserDefaults `capture`, POST /capture {"mode":"remote"|"webcam"}; default remote). Remote mode (app/SonyRemote.swift):
+  RECORD = guide track starts, then `sonycam start` (MACRO_SKILLS tools/sonycam, Imaging Edge Remote over USB), REC confirmed by `sonycam status`;
+  STOP = `sonycam stop`, guide stops 0.5 s later. During a sonycam click the full-screen window lets clicks through (`passClicks`) and takes the front back (`refront`).
+  A poll every second mirrors REC/STBY and the camera counter (GET /status `cameraState`, `cameraCounter`); REC or STOP pressed on the camera or in Remote is followed.
+- **Picture**: Imaging Edge Remote's biggest window (bundle com.sony.Remote) captured by ScreenCaptureKit (one window, 30 fps; calls from MANTRA_MACRO Capture.swift) and shown
+  full screen with the shot title and text on top; Remote may sit on any screen. Needs Screen Recording for Second Take (PERMISSIONS, amber, top right).
+- **Take** (takes.json): path = `~/Movies/<take name>.guide.m4a` (Mac microphone, AAC mono 64 kb/s), `camera: true`, `camStart` (ISO, Mac clock at counter 0), `camSecs`,
+  later `cameraFile`, `cameraOffset` (tools/secondtake-match), `said` + `heard` (Voice to Text of the guide; `heard` = the shot the words sound like, a hint in the log).
+  In remote mode only camera takes count for a shot's state; the webcam takes of 13-14.11.2026 stay listed.
+- **Matching afterwards**: `tools/secondtake-match [card PRIVATE/M4ROOT/CLIP or folder] [--dry-run]`: clip CreationDate (XML sidecar / ffprobe) against camStart with the
+  best common clock offset (start and length within 3 s), then guide-vs-clip sound cross-correlation (offset, peak; < 0.15 = check by ear). Tested on synthetic clips (30 s clock offset, 1.0 s found).
+  `secondtake-finish` uses `cameraFile` for camera takes (skips unmatched ones and says so in LESSON_DRAFT.md).
+- **Plan**: `tools/plan_sync [--live] [--dry-run]`: the shot ORDER follows the MPA Academy LESSON PLAN (Text Lesson cb38b4ba); plan steps the class did not show become shots
+  12 Foot-bell exercise 1, 13 Warm-up EX02, 14 Maqsum orn T, 15 Maqsum orn P (no clip; WATCH shows their text); toning and the closing song are not shot. Backup
+  `<lesson>.analysis.before-plan-sync.json`. v24: the app keeps the file's shot order (no sort by number); SHOOT shows "SHOT 2 OF 15 · NO. 12".
+- **Queen** ($0, groq_ai_studio qwen_app/second_take.py, skill second-take): "start second take", "next exercise", "stop second take", "second take status".
+- Not run yet: a real camera take through the app (needs Marko watching, and Screen Recording on). tools/rehearsal_test still tests the webcam path.

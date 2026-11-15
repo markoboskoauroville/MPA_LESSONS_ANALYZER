@@ -18,3 +18,6 @@
 - 13.11.2026: a stale picture behind an error message looks like a working camera (v20); clear it.
 - 13.11.2026: a rehearsal that is a script (tools/rehearsal_test, PASS/FAIL) finds more than reading code; keep it and rerun after every version.
 - 13.11.2026: a macOS compile fix can hide in a device-format call: set the 4K format on the device after the preset (v18).
+- 15.11.2026: the app sorted shots by number, so a reordered analysis.json was undone on load; the file's order is the order now (v24). Read the parser before reordering data.
+- 15.11.2026: sonycam clicks at screen positions in Remote's window: any always-on-top window of ours over it would take the click. Let clicks through during the hand's click.
+- 15.11.2026: "next" in SHOOT means KEEP and go on (it can keep a pending take); a Queen test of "next exercise" moved the current shot; put it back with POST /shot {"n"}.
