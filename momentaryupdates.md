@@ -74,3 +74,15 @@ Marko: "Application has a bug. We stopped. It goes to the next clip. Please brin
 ## 15.11.2026: a real take flagged "no camera clip", KEEP kept the older take
 (from the coordinator: shot 1 take 5, about 6 minutes, really recorded, got camSecs 0; KEEP then kept take 4)
 **Status:** v29: the counter is the longest seen during the take (after a stop it reads 00:00:00); if REC was seen but no counter was read, the guide length less 4 s is used and marked estimated; KEEP keeps only the take just recorded, a no-clip take asks first (KEEP again within 15 s keeps it); the match tool skips the length check for an estimated take. Data fixed at the v29 install: take 5 kept, take 4 not kept.
+
+## 15.11.2026 ~17:40 — Marko, during the Second Take session
+"This one is done. We call it practicing traditional rhythm with the foot-bell. Traditional rhythm name is. So we were hitting the... On the foot-bell on the first beat. And give me the next one now. we always play first and then we record"
+Status: noted by mac23; recorded manually by Marko; DaVinci timeline "5. Practicing traditional rhythm Maqsum with the foot-bell" created. Order so far: 1 How to hold the drum, 2 Foot-bell exercise 1, 3 Warm-up basic strokes EX02, 4 Two hands - loud and touch, 5 Practicing traditional rhythm Maqsum with the foot-bell. Workflow rule: play the class clip first, then record.
+
+## 15.11.2026 ~17:45 — Marko
+"So this this exercise was replacing tach with the pa in traditional rhythms. So we took maxim and play once normal with tach, and then we replace it with pa. I will not say normal, we just make different variations. So two variation idea is just you can call the sequence replacing tach with pa."
+Status: DaVinci timeline "6. Replacing TAK with PA" created (Maqsum played with TAK, then the variation with PA).
+
+## 15.11.2026 ~17:50 — Marko
+"Next exercise was introduction to ornaments, and we were playing maxim, normal, and then maxim with ornaments. To get into this feeling of double speed to get to this feeling of double speed, we did one exercise with conical and the foot playing a takademi in a single speed and then ta cademi in a double speed. And then after that, we were practicing traditional rhythm maxim with ornament at the end. Last two beats were double speed."
+Status: DaVinci timeline "7. Introduction to ornaments" created. Content: Maqsum plain, then Maqsum with ornaments; konnakol TA-KA-DI-MI with the foot, single speed then double speed; Maqsum with the ornament at the end (last two beats in double speed).
