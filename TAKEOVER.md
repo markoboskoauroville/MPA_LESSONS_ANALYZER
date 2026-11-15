@@ -76,3 +76,14 @@ recording and then put it on the second when we don't need it. Use Rectangle" an
 - WATCH: a normal titled window, almost-maximized on the chosen screen (visible frame less 2.5 % around), level normal; never borderless full screen.
 - Dry flip of Remote tested by sonycam front/away with screenshots of both screens (MacBook: Remote 1361x850 in front, not full screen; BenQ after away).
   The flip through the app itself (v26) is not yet run: Marko paused screen work at 14:12.
+
+## v27 (15.11.2026): SHOOT is a standard window; Remote big on the BenQ with a RECORDING overlay
+- SHOOT (app/ShootWindow.swift) is a standard window, not a sheet: titled, resizable from every edge, frame autosave "SecondTakeShoot", first place 720x520 on the MacBook screen,
+  minimum 420x360, full screen (green button, ⌃⌘F, FULL SCREEN in the panel) with text growing with the width (x1 to x2.6); buttons wrap (FlowLayout), the whole panel scrolls.
+  Checked by screenshots at 720x520 and 420x360 (nothing cut; buttons on two rows at the minimum). POST /shoot/size {"w","h"}, GET /shoot/window; POST /shoot/start {"quiet":true} opens it without Beatrice.
+- RECORD: `sonycam big` (MACRO_SKILLS): Remote on the BenQ, Rectangle maximize (not macOS full screen); it stays there after the take; the SHOOT window comes to the front on the MacBook.
+  RecOverlay: a click-through non-activating panel on the BenQ: "● RECORDING", timer (camera counter, else own clock), shot title, 6 px red edges left and right; STANDBY line when not
+  recording. POST /overlay/test {"on":true|false} simulates it (screenshot checked 15.11.2026).
+- A camera take whose counter never moved (camSecs < 1) is marked "(no camera clip ...)", never counts and is never kept. While recording, a lost live view says CAMERA LOST.
+- The 0 s take of 16:56:56: it was started by the RECORD path (button, key 2 in SHOOT, POST /record, the phone or Queen; the log line "REC shot" is written only there), not by
+  /shoot/start or WATCH; the guide ran 125 s while the camera's counter never moved and Remote lost its live view (state NONE), so no clip on the card; the take closed when STBY came back.
