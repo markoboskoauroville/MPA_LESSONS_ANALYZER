@@ -92,8 +92,8 @@ struct ContentView: View {
                 Button("RELEASE \(o)") { ctl.release() }.buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("The remote \(o) controls this app; release it so another remote can connect")
             }
-            if CameraEngine.permissionsMissing {
-                Button("PERMISSIONS") { CameraEngine.openPermissions() }.buttonStyle(.plain).foregroundStyle(Color.orange)
+            if Capture.permissionsMissing {
+                Button("PERMISSIONS") { Capture.openPermissions() }.buttonStyle(.plain).foregroundStyle(Color.orange)
                     .help("Camera or microphone is not allowed yet: opens the switch in System Settings")
             }
             Button("Settings") { showSettings = true }.buttonStyle(.plain).foregroundStyle(.secondary)
@@ -339,6 +339,7 @@ struct SettingsView: View {
     @AppStorage("exportFolder") private var exportFolder = (NSHomeDirectory() + "/Desktop")
     @AppStorage("voiceToTextPort") private var vtPort = 0
     @AppStorage("viewScreen") private var viewScreen = ""
+    @AppStorage("capture") private var capture = "remote"
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -369,8 +370,14 @@ struct SettingsView: View {
                 Text("The display with the menu bar (the BenQ)").tag("")
                 ForEach(WatchScreen.screenNames, id: \.self) { Text($0).tag($0) }
             }.labelsHidden().frame(maxWidth: 360)
-            Text("Camera and microphone are built in: the Sony (USB) first, the microphone of the Mac; POST /camera chooses others.").font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text("RECORDING").font(.system(size: 10)).foregroundStyle(.secondary)
+            Picker("", selection: $capture) {
+                Text("On the Sony's card, by remote control (Imaging Edge Remote)").tag("remote")
+                Text("Built-in webcam capture (the Sony over USB Streaming)").tag("webcam")
+            }.labelsHidden().frame(maxWidth: 460)
+            Text(capture == "webcam" ? "Camera and microphone are built in: the Sony (USB) first, the microphone of the Mac; POST /camera chooses others."
+                 : "RECORD and STOP press the Sony's record button through Imaging Edge Remote (sonycam); its window is shown full screen here; the Mac's microphone writes a small guide track per take.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             Divider()
             Text("© 2026 Mantra Productions").font(.system(size: 11)).foregroundStyle(.secondary.opacity(0.7))

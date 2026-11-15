@@ -72,10 +72,22 @@ def safe(t):
     return re.sub(r"\s+", " ", t).strip()
 
 
+def source(t):
+    """the video of a take: the matched camera clip (tools/secondtake-match) for a camera take, else the webcam take itself"""
+    return t.get("cameraFile") or ("" if t.get("camera") else t["path"])
+
+
+def unmatched(d):
+    return [t for t in d["takes"] if t.get("camera") and "(discarded)" not in t.get("note", "") and not (t.get("cameraFile") and os.path.exists(t["cameraFile"]))]
+
+
 def pick_takes(d, shots, unkept):
     out = []
     for sh in shots:
-        ts = [t for t in d["takes"] if t["shot"] == sh["n"] and os.path.exists(t["path"]) and "(discarded)" not in t.get("note", "")]
+        alln = [t for t in d["takes"] if t["shot"] == sh["n"] and "(discarded)" not in t.get("note", "")]
+        # v23: once a shot has camera takes (the Sony's card, by remote control) only they count; the source is the matched card clip
+        cam = [t for t in alln if t.get("camera")]
+        ts = [t for t in (cam or alln) if os.path.exists(source(t))]
         k = [t for t in ts if t.get("kept")]
         t = k[-1] if k else (ts[-1] if ts and unkept else None)
         if t and "(discarded)" not in t.get("note", ""):
@@ -125,7 +137,7 @@ def finish(a):
     if not a.dry_run: os.makedirs(out, exist_ok=True)
     for sh, t, kept in pick_takes(d, shots, a.unkept):
         name = safe(f"{a.lesson} - {sh['n']} {sh['title']}")
-        src, dst = t["path"], os.path.join(out, name + ".mp4")
+        src, dst = source(t), os.path.join(out, name + ".mp4")
         dur = duration(src)
         s, e, note = speech_range(src, dur)
         r = {"shot": sh["n"], "title": sh["title"], "code": sh.get("code", ""), "say": (d.get("edits") or {}).get(str(sh["n"])) or sh.get("say", ""),
@@ -134,6 +146,7 @@ def finish(a):
             p = export(src, dst, s, e, lut)
             r["verify"] = verify(dst, e - s) if p.returncode == 0 and os.path.exists(dst) else {"ok": False, "error": p.stderr[-300:]}
         res.append(r)
+    um = unmatched(d)
     draft = out + "/LESSON_DRAFT.md"
     md = [f"# DRAFT website lesson: {a.lesson} (not published)", "", f"Written {datetime.datetime.now():%d.%m.%Y %H:%M} by secondtake-finish. Source lesson: {d.get('video','')}", "",
           f"Grade: {grade}", ""]
@@ -142,8 +155,9 @@ def finish(a):
                f"- Say: {r['say']}", f"- Take: {r['take']} ({r['take_duration']} s, trimmed {r['trim_start']} to {r['trim_end']} s){' ' + r['note'] if r['note'] else ''}",
                f"- Checked: {'OK' if r.get('verify', {}).get('ok') else 'NOT OK or not run'}", ""]
     md += ["## Waiting for Marko's approval (NOT done)", "1. Watch the clips.", "2. Upload (one approval).", "3. Website lesson page deploy (one approval, after all shots)."]
+    if um: md += ["", f"NOT MATCHED YET: {len(um)} camera takes have no card clip: run tools/secondtake-match <card folder> first."]
     if not a.dry_run: open(draft, "w").write("\n".join(md) + "\n")
-    return {"out": out, "draft": draft, "grade": grade, "clips": res, "ok": bool(res) and all(r.get("verify", {}).get("ok") for r in res) if not a.dry_run else True}
+    return {"unmatched": len(um), "out": out, "draft": draft, "grade": grade, "clips": res, "ok": bool(res) and all(r.get("verify", {}).get("ok") for r in res) if not a.dry_run else True}
 
 
 def main():

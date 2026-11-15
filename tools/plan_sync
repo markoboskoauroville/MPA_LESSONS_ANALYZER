@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""plan_sync: bring the Second Take shot list in line with the MPA Academy lesson plan (15.11.2026).
+
+  plan_sync [--analysis F] [--plan F | --live] [--dry-run]
+
+The plan is the Text Lesson "LESSON PLAN" of the site (one step per line: minutes | title | what it is | CODE); --live reads
+it from mpa-academy.pages.dev (MPA/tools/note.mjs, read-only), else the repo copy MPA/lessons/lesson-plan-natasha.txt.
+The shots come from Marko's transcribed class (analysis.json, "shots"). Kept as they are: every class shot, its number, its
+clips and its text (take names use the number). Changed: the ORDER follows the plan, and every plan step that the class
+did not show becomes a new shot ("plan": true, no source clip, the plan's words as its text). Steps that are not drumming
+(the toning introduction, the closing song) are listed, not shot. A backup <analysis>.before-plan-sync.json is written once.
+"""
+import argparse, json, os, re, shutil, subprocess, sys
+
+HOME = os.path.expanduser("~")
+ANALYSIS = HOME + "/Downloads/MPA Academy Classroom 12.11.2026.analysis.json"
+PLAN = HOME + "/Developer/MPA/lessons/lesson-plan-natasha.txt"
+
+# plan step (by words in its title) -> the class shots that already show it, in this order
+COVERED = [
+    (r"toning|chakra", None),                 # not drumming: not shot
+    (r"closing|om shanti", None),             # not drumming: not shot
+    (r"option 1: t\b", [2, 3, 4, 5]),         # Maqsum with TAK: two hands, slowly, foot on the first DUM, hand coordination
+    (r"option 2: p\b", [6, 7, 8, 9]),         # Maqsum with PA: the PA sound, the swing, straight hand, Maqsum with PA
+]
+FIRST = [1]          # sitting and holding the drum comes before everything
+LAST = [10, 11]      # the four mistakes, the lesson in one take
+
+
+def read_plan(live, path):
+    if live:
+        p = subprocess.run(["node", "tools/note.mjs", "get", "LESSON PLAN"], cwd=HOME + "/Developer/MPA", capture_output=True, text=True, timeout=120)
+        body = p.stdout.split("\n----\n", 1)[-1]
+    else:
+        body = open(path).read()
+    steps = []
+    for line in body.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"): continue
+        f = [x.strip() for x in line.split("|")]
+        if len(f) < 3: continue
+        steps.append({"min": f[0], "title": f[1], "what": f[2], "code": (f[3] if len(f) > 3 else "").split("=")[0] if len(f) > 3 and "=" not in f[3] else ""})
+    return steps
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--analysis", default=ANALYSIS)
+    ap.add_argument("--plan")
+    ap.add_argument("--live", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    an = json.load(open(a.analysis))
+    shots = [s for s in an["shots"] if not s.get("plan")]          # earlier plan shots are made again
+    old_order = [s["n"] for s in an["shots"]]
+    by_n = {s["n"]: s for s in shots}
+    nxt = max(by_n) + 1
+    order, added, notshot = list(FIRST), [], []
+    prev_plan = {s["title"]: s["n"] for s in an["shots"] if s.get("plan")}
+    for st in read_plan(a.live, a.plan or PLAN):
+        low = st["title"].lower()
+        hit = next((c for c in COVERED if re.search(c[0], low)), None)
+        if hit and hit[1] is None: notshot.append(st["title"]); continue
+        if hit: order += [n for n in hit[1] if n in by_n and n not in order]; continue
+        m = re.match(r"rhythm, option \d+:\s*(.+)", low)
+        if m: title = "Maqsum, " + st["title"].split(":", 1)[1].strip()          # "Maqsum, orn T"
+        elif low.startswith("warm-up"): title = "Warm-up: basic strokes" + (" " + st["code"] if st["code"] else "")
+        else: title = st["title"].split(":", 1)[0].strip()                      # "Foot-bell exercise 1"
+        n = prev_plan.get(title) or nxt
+        if n == nxt: nxt += 1
+        sh = {"n": n, "title": title, "code": st["code"], "say": st["what"], "secs": 45, "watch": [], "plan": True,
+              "from": "MPA Academy LESSON PLAN, not shown in the class of 12.11.2026"}
+        by_n[n] = sh; added.append(sh); order.append(n)
+    order += [n for n in LAST if n in by_n and n not in order]
+    order += [n for n in by_n if n not in order]                    # nothing is ever dropped
+    new = [by_n[n] for n in order]
+    print("plan:", "live site" if a.live else (a.plan or PLAN))
+    print("before:", old_order)
+    print("after: ", order)
+    for s in added: print(f"  new shot {s['n']}: {s['title']}  {s['code'] or ''}  ({s['say'][:70]})")
+    for t in notshot: print(f"  not shot (not drumming): {t}")
+    if a.dry_run: print("dry run: nothing written"); return
+    bak = a.analysis.replace(".analysis.json", ".analysis.before-plan-sync.json")
+    if not os.path.exists(bak): shutil.copy2(a.analysis, bak)
+    an["shots"] = new
+    an["planSync"] = {"date": "15.11.2026", "plan": "live" if a.live else os.path.basename(a.plan or PLAN), "added": [s["n"] for s in added], "notShot": notshot}
+    json.dump(an, open(a.analysis, "w"), indent=2, ensure_ascii=False)
+    print("written:", a.analysis, "(backup", os.path.basename(bak) + ")")
+
+
+if __name__ == "__main__":
+    main()

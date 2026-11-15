@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""secondtake-match: give every camera take of Second Take (v23) its clip from the Sony's card.
+
+  secondtake-match [CLIP_FOLDER] [--takes F] [--dry-run] [--json] [--no-audio]
+
+CLIP_FOLDER: the card's PRIVATE/M4ROOT/CLIP (found by itself on any mounted card when left out) or any folder with the
+camera's .MP4 files (copied from the card). Writes "cameraFile" and "cameraOffset" into <video>.takes.json; nothing is
+copied, cut or deleted; no network, no paid call.
+
+How a take is matched (15.11.2026):
+ 1. Start time: each camera take has camStart (the Mac's clock when the camera's REC counter was 0). Each clip has its
+    CreationDate (the XML beside it, C0001M01.XML, else ffprobe creation_time). The camera's clock may be off: the offset
+    that pairs the most takes and clips (start within 3 s and length within 3 s) is used.
+ 2. Sound: the take's guide track (the Mac's microphone, .guide.m4a) is cross-correlated with the clip's sound
+    (first 40 s, 8 kHz mono): cameraOffset = seconds to add to a clip time to get the guide time. A weak peak is reported.
+"""
+import argparse, glob, json, os, re, subprocess, sys, datetime
+
+HOME = os.path.expanduser("~")
+DL = HOME + "/Downloads"
+
+
+def run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def card_folder():
+    for v in sorted(glob.glob("/Volumes/*/PRIVATE/M4ROOT/CLIP")):
+        return v
+    return None
+
+
+def iso(s):
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def clip_info(mp4):
+    stem = os.path.splitext(mp4)[0]
+    start, dur = None, None
+    for x in glob.glob(stem + "M01.XML") + glob.glob(stem + "M01.xml"):
+        t = open(x, errors="ignore").read()
+        m = re.search(r'<CreationDate value="([^"]+)"', t)
+        if m: start = iso(m.group(1))
+    p = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", mp4])
+    try:
+        f = json.loads(p.stdout)["format"]
+        dur = float(f.get("duration", 0))
+        if start is None and f.get("tags", {}).get("creation_time"):
+            start = iso(f["tags"]["creation_time"])
+    except Exception:
+        pass
+    if start is None:
+        start = datetime.datetime.fromtimestamp(os.path.getmtime(mp4)).astimezone() - datetime.timedelta(seconds=dur or 0)
+    if start.tzinfo is None:
+        start = start.astimezone()
+    return {"file": mp4, "start": start, "dur": dur or 0}
+
+
+def pcm(path, secs=40):
+    import numpy as np
+    p = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-t", str(secs), "-ac", "1", "-ar", "8000", "-f", "f32le", "-"], capture_output=True)
+    return np.frombuffer(p.stdout, dtype=np.float32)
+
+
+def xcorr(guide, clip):
+    """seconds to add to a clip time to get the guide time, and the peak strength (0..1)"""
+    import numpy as np
+    a, b = pcm(guide), pcm(clip)
+    if len(a) < 8000 or len(b) < 8000:
+        return None, 0
+    a = (a - a.mean()) / (a.std() + 1e-9); b = (b - b.mean()) / (b.std() + 1e-9)
+    n = 1 << int(np.ceil(np.log2(len(a) + len(b))))
+    c = np.fft.irfft(np.fft.rfft(a, n) * np.conj(np.fft.rfft(b, n)), n)
+    lag = int(np.argmax(np.abs(c)))
+    if lag > n // 2: lag -= n
+    peak = float(np.abs(c).max() / min(len(a), len(b)))
+    return round(lag / 8000.0, 3), round(peak, 3)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("folder", nargs="?")
+    ap.add_argument("--takes")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--no-audio", action="store_true")
+    a = ap.parse_args()
+    folder = a.folder or card_folder()
+    if not folder or not os.path.isdir(folder):
+        sys.exit("no clip folder: put the card in (PRIVATE/M4ROOT/CLIP) or name the folder with the camera's MP4 files")
+    tk = a.takes or (sorted(glob.glob(DL + "/*.takes.json"), key=os.path.getmtime) or [None])[-1]
+    if not tk: sys.exit("no takes file")
+    d = json.load(open(tk))
+    takes = [t for t in d["takes"] if t.get("camera") and t.get("camStart")]
+    clips = [clip_info(f) for f in sorted(glob.glob(folder + "/*.MP4") + glob.glob(folder + "/*.mp4"))]
+    if not takes: sys.exit("no camera takes in " + tk)
+    if not clips: sys.exit("no MP4 clips in " + folder)
+    for t in takes: t["_start"] = iso(t["camStart"])
+
+    # the clock offset (clip start - take start) that pairs the most
+    cands = [(c["start"] - t["_start"]).total_seconds() for t in takes for c in clips]
+    def pairs(off):
+        used, out = set(), {}
+        for i, t in enumerate(takes):
+            best = None
+            for j, c in enumerate(clips):
+                if j in used: continue
+                dt = abs((c["start"] - t["_start"]).total_seconds() - off)
+                dd = abs(c["dur"] - (t.get("camSecs") or t.get("duration") or 0))
+                if dt <= 3 and (dd <= 3 or not t.get("camSecs")) and (best is None or dt < best[0]): best = (dt, j)
+            if best: used.add(best[1]); out[i] = best[1]
+        return out
+    best_off, best_pairs = 0, {}
+    for off in [0] + cands:
+        p = pairs(off)
+        if len(p) > len(best_pairs) or (len(p) == len(best_pairs) and abs(off) < abs(best_off)): best_off, best_pairs = off, p
+
+    res = []
+    for i, t in enumerate(takes):
+        r = {"shot": t["shot"], "guide": t["path"], "camStart": t["camStart"], "camSecs": t.get("camSecs")}
+        if i in best_pairs:
+            c = clips[best_pairs[i]]
+            r.update(clip=c["file"], clipStart=c["start"].isoformat(), clipSecs=round(c["dur"], 2))
+            if not a.no_audio and t.get("path") and os.path.exists(t["path"]):
+                off, peak = xcorr(t["path"], c["file"])
+                r.update(offset=off, peak=peak, sound="OK" if peak >= 0.15 else "WEAK: check by ear")
+            t["cameraFile"] = c["file"]
+            if r.get("offset") is not None: t["cameraOffset"] = r["offset"]
+        else:
+            r["clip"] = None
+        res.append(r)
+    for t in takes: t.pop("_start", None)
+    if not a.dry_run: json.dump(d, open(tk, "w"), indent=2, sort_keys=True, ensure_ascii=False)
+    out = {"takes": tk, "folder": folder, "clockOffset": round(best_off, 1), "matched": len(best_pairs), "of": len(takes), "result": res}
+    if a.json: print(json.dumps(out, indent=1, default=str)); return
+    print(f"camera clock offset {out['clockOffset']} s; matched {out['matched']} of {out['of']} camera takes{' (dry run, nothing written)' if a.dry_run else ''}")
+    for r in res:
+        print(f"shot {r['shot']}: {os.path.basename(r['guide'] or '-')} -> {os.path.basename(r['clip']) if r['clip'] else 'NO CLIP'}"
+              + (f"  offset {r.get('offset')} s, {r.get('sound')}" if r.get("clip") and "offset" in r else ""))
+
+
+if __name__ == "__main__":
+    main()

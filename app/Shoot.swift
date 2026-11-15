@@ -10,6 +10,14 @@ struct Take: Identifiable {
     var duration: Double
     var kept: Bool
     var note: String
+    // v23: a take recorded on the Sony's card by remote control: path = the Mac's guide track (.guide.m4a)
+    var camera: Bool = false
+    var camStart: String = ""      // ISO 8601 wall clock of the camera's REC (counter subtracted)
+    var camSecs: Double = 0        // the camera's counter at STOP
+    var cameraFile: String = ""    // the clip on the card, filled by tools/secondtake-match
+    var cameraOffset: Double = 0   // seconds: guide time = camera time + offset (match tool)
+    var said: String = ""          // the guide track's words (Voice to Text)
+    var heard: Int = 0             // the shot the words sound like (0 = not checked)
 }
 
 /// Records the microphone until Marko stops talking (1.5 s of silence after speech, 30 s at most) into a temp WAV.
@@ -102,8 +110,10 @@ final class Shoot: ObservableObject {
     func tell(_ text: String) { status = text; Task { await speak(text) } }
 
     // MARK: state
-    func isKept(_ n: Int) -> Bool { takes.contains { $0.shot == n && $0.kept } }
-    func state(_ n: Int) -> String { isKept(n) ? "kept" : (skipped.contains(n) ? "skipped" : (takes.contains { $0.shot == n } ? "recorded" : "pending")) }
+    /// in camera mode only the camera takes count (the webcam takes of 13-14.11.2026 stay listed, but the shot is still to do)
+    func counts(_ t: Take) -> Bool { !Capture.remote || t.camera }
+    func isKept(_ n: Int) -> Bool { takes.contains { $0.shot == n && $0.kept && counts($0) } }
+    func state(_ n: Int) -> String { isKept(n) ? "kept" : (skipped.contains(n) ? "skipped" : (takes.contains { $0.shot == n && counts($0) } ? "recorded" : "pending")) }
     func sayText(_ s: Shot) -> String { edits[s.n] ?? s.say }
 
     func begin(shot: Int? = nil) {
@@ -117,14 +127,16 @@ final class Shoot: ObservableObject {
 
     func introduce() {
         guard let s = current else { return }
-        tell("Shot \(s.n): \(s.title). Watch the source, or record?")
+        tell(s.watch.isEmpty ? "Shot \(s.n): \(s.title), from the lesson plan. Record when you are ready." : "Shot \(s.n): \(s.title). Watch the source, or record?")
     }
 
     func loadTakes() {
         guard takes.isEmpty, let d = FileManager.default.contents(atPath: takesPath),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
         takes = (o["takes"] as? [[String: Any]] ?? []).map {
-            Take(shot: Int(num($0["shot"])), path: $0["path"] as? String ?? "", duration: num($0["duration"]), kept: $0["kept"] as? Bool ?? false, note: $0["note"] as? String ?? "")
+            Take(shot: Int(num($0["shot"])), path: $0["path"] as? String ?? "", duration: num($0["duration"]), kept: $0["kept"] as? Bool ?? false, note: $0["note"] as? String ?? "",
+                 camera: $0["camera"] as? Bool ?? false, camStart: $0["camStart"] as? String ?? "", camSecs: num($0["camSecs"]),
+                 cameraFile: $0["cameraFile"] as? String ?? "", cameraOffset: num($0["cameraOffset"]), said: $0["said"] as? String ?? "", heard: Int(num($0["heard"])))
         }
         takes.removeAll { !$0.path.isEmpty && !FileManager.default.fileExists(atPath: $0.path) }   // moved or deleted files do not linger
         skipped = Set((o["skipped"] as? [Any] ?? []).map { Int(num($0)) })
@@ -133,9 +145,23 @@ final class Shoot: ObservableObject {
     }
 
     func saveTakes() {
+        // the match tool may have written cameraFile/cameraOffset into the file meanwhile: keep them
+        if let d = FileManager.default.contents(atPath: takesPath), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            for x in o["takes"] as? [[String: Any]] ?? [] {
+                guard let p = x["path"] as? String, let f = x["cameraFile"] as? String, !f.isEmpty,
+                      let i = takes.firstIndex(where: { $0.path == p && $0.cameraFile.isEmpty }) else { continue }
+                takes[i].cameraFile = f; takes[i].cameraOffset = num(x["cameraOffset"])
+            }
+        }
         let o: [String: Any] = [
             "video": store.videoName,
-            "takes": takes.map { ["shot": $0.shot, "path": $0.path, "duration": $0.duration, "kept": $0.kept, "note": $0.note] as [String: Any] },
+            "takes": takes.map { t -> [String: Any] in
+                var o: [String: Any] = ["shot": t.shot, "path": t.path, "duration": t.duration, "kept": t.kept, "note": t.note]
+                if t.camera { o["camera"] = true; o["camStart"] = t.camStart; o["camSecs"] = t.camSecs; o["cameraFile"] = t.cameraFile; o["cameraOffset"] = t.cameraOffset }
+                if !t.said.isEmpty { o["said"] = t.said; o["heard"] = t.heard }
+                return o
+            },
+            "capture": Capture.remote ? "remote" : "webcam",
             "skipped": skipped.sorted(),
             "ignored": ignored.sorted(),
             "edits": Dictionary(uniqueKeysWithValues: edits.map { (String($0.key), $0.value) }),
@@ -152,7 +178,7 @@ final class Shoot: ObservableObject {
         let prefix = lessonLabel + " · shot "
         var newest: (Date, Int)? = nil
         var changed = false
-        for n in names where n.hasPrefix(prefix) && n.hasSuffix(".mov") {
+        for n in names where n.hasPrefix(prefix) && (n.hasSuffix(".mov") || n.hasSuffix(".guide.m4a")) {
             let path = dir.appendingPathComponent(n).path
             let rest = n.dropFirst(prefix.count)
             guard let shot = Int(rest.prefix { $0.isNumber }) else { continue }
@@ -161,7 +187,9 @@ final class Shoot: ObservableObject {
             if newest == nil || mod > newest!.0 { newest = (mod, shot) }
             if takes.contains(where: { $0.path == path }) || ignored.contains(path) { continue }
             let dur = CMTimeGetSeconds(AVURLAsset(url: URL(fileURLWithPath: path)).duration)
-            takes.append(Take(shot: shot, path: path, duration: dur.isFinite ? dur : 0, kept: false, note: "recovered"))
+            var t = Take(shot: shot, path: path, duration: dur.isFinite ? dur : 0, kept: false, note: "recovered")
+            if n.hasSuffix(".guide.m4a") { t.camera = true; t.camStart = iso((attrs?[.creationDate] as? Date) ?? mod) }
+            takes.append(t)
             changed = true
         }
         if changed { saveTakes(); log.append("recovered takes listed again") }
@@ -199,8 +227,9 @@ final class Shoot: ObservableObject {
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
         var k = takes.filter { $0.shot == s.n }.count + 1
         // the first free number: no listed take and no file in ~/Movies carries it
-        while takes.contains(where: { ($0.path as NSString).lastPathComponent == base + "\(k).mov" })
-                || FileManager.default.fileExists(atPath: movies.appendingPathComponent(base + "\(k).mov").path) { k += 1 }
+        while takes.contains(where: { ["\(base)\(k).mov", "\(base)\(k).guide.m4a"].contains(($0.path as NSString).lastPathComponent) })
+                || FileManager.default.fileExists(atPath: movies.appendingPathComponent(base + "\(k).mov").path)
+                || FileManager.default.fileExists(atPath: movies.appendingPathComponent(base + "\(k).guide.m4a").path) { k += 1 }
         return base + "\(k)"
     }
     var recSince: Date { recStart }
@@ -210,6 +239,7 @@ final class Shoot: ObservableObject {
 
     /// Opens the built-in camera (the Sony first) and waits, bounded, until frames arrive. Returns an error text or nil.
     func prepareCamera() async -> String? {
+        if Capture.remote { return await prepareRemote() }
         cameraInfo = "Opening the camera..."
         if let e = await CameraEngine.shared.start() { cameraInfo = e; status = e; cameraMissing = CameraEngine.shared.missing; return e }
         cameraMissing = false
@@ -222,9 +252,17 @@ final class Shoot: ObservableObject {
 
     var dryRun = false
     private var dryActive = false
+    var guide: GuideTrack?            // v23: the guide track of the running camera take
+    var camStartDate: Date?
+    var remoteBusy = false            // a camera start/stop is in progress: the poll loop does not adopt or close takes
+    var lastConnectTry = Date.distantPast
+    var dryNow: Bool { dryActive }
+    func setDry(_ on: Bool) { dryActive = on }
+    func setRecStart(_ d: Date) { recStart = d }
 
     func startRecording() async {
         guard let s = current, !recording else { return }
+        if Capture.remote { await startRemote(s); return }
         if let err = await prepareCamera() { log.append("camera: " + err); await speak("The camera is not ready."); return }
         if dryRun {
             dryActive = true; recording = true; recStart = Date()
@@ -242,6 +280,7 @@ final class Shoot: ObservableObject {
 
     func stopRecording() async {
         guard recording, let s = current else { return }
+        if Capture.remote { await stopRemote(s, click: true); return }
         if dryActive { dryActive = false; recording = false; dryRun = false; status = "Dry run finished: no file, no take."; return }
         let (p, d, err) = await CameraEngine.shared.stopRecord()
         recording = false
@@ -296,7 +335,12 @@ final class Shoot: ObservableObject {
     // MARK: actions
     func toggleRecord() { Task { if recording { await stopRecording() } else { await startRecording() } } }
 
-    func watch() { if let s = current { store.watchShot(s.n); status = "Watching the source clips of shot \(s.n)." } }
+    func watch() {
+        guard let s = current else { return }
+        store.watchShot(s.n)
+        // v23: a shot from the lesson plan has no clip in the class: the screen shows its title and text
+        status = s.watch.isEmpty ? "Shot \(s.n) is from the lesson plan, there is no clip of it in the class: \(sayText(s))" : "Watching the source clips of shot \(s.n)."
+    }
 
     /// AGAIN = ready for another take of this shot: the last take is marked discarded, the live picture is shown, nothing records until RECORD
     func again(dry: Bool = false) {
@@ -531,6 +575,149 @@ final class Shoot: ObservableObject {
     }
 }
 
+// MARK: v23: the take on the Sony's card, by remote control (sonycam), with the Mac's guide track
+extension Shoot {
+    func iso(_ d: Date) -> String { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f.string(from: d) }
+
+    /// the camera answers in Imaging Edge Remote (connect once, at most every 30 s); the window picture and the REC mirror start
+    func prepareRemote() async -> String? {
+        let r = SonyRemote.shared
+        if cameraInfo.isEmpty || cameraMissing { cameraInfo = "Reading the camera (Imaging Edge Remote)..." }
+        await r.poll()
+        if (r.state == "NONE" || r.state == "?") && Date().timeIntervalSince(lastConnectTry) > 30 {
+            lastConnectTry = Date()
+            cameraInfo = "Connecting the camera in Imaging Edge Remote..."
+            _ = await r.click("connect")
+            await r.poll()
+        }
+        if r.state == "NONE" || r.state == "?" {
+            cameraMissing = true
+            let e = "CAMERA NOT CONNECTED: Imaging Edge Remote shows no live view."
+            cameraInfo = e; status = e
+            return e
+        }
+        cameraMissing = false
+        await r.startView()
+        r.startPolling()
+        cameraInfo = "Sony α7 V by remote control · \(r.state) · guide sound: Mac microphone" + (r.pictureError.isEmpty ? "" : "\n" + r.pictureError)
+        return nil
+    }
+
+    /// is a camera there at all (cheap, from the last poll; unknown counts as there, RECORD then checks)
+    var cameraPresent: Bool { Capture.remote ? SonyRemote.shared.state != "NONE" : CameraEngine.shared.wantedPresent() }
+
+    func startRemote(_ s: Shot) async {
+        guard !remoteBusy else { return }
+        remoteBusy = true; defer { remoteBusy = false }
+        let r = SonyRemote.shared
+        if let err = await prepareRemote() { log.append("camera: " + err); await speak("The camera is not connected."); return }
+        if dryRun {
+            setDry(true); recording = true; setRecStart(Date())
+            status = "Dry run of shot \(s.n): the camera is not started, no file is written."
+            WatchScreen.shared.showLive(shot: s.n)
+            return
+        }
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined { _ = await AVCaptureDevice.requestAccess(for: .audio) }
+        let title = takeTitle(s)
+        let g = GuideTrack()
+        if let e = g.start(title: title) { log.append("guide track: " + e) }      // the camera take matters more: go on without it
+        if r.state != "REC" { _ = await r.click("start") }
+        if r.state != "REC" { await r.poll() }
+        guard r.state == "REC" else {
+            let (gp, _) = g.stop()
+            if let gp { try? FileManager.default.removeItem(atPath: gp) }
+            status = "The camera did not start recording. \(r.lastLine)"
+            log.append("record: " + r.lastLine)
+            await speak("The camera did not start.")
+            return
+        }
+        guide = g
+        camStartDate = Date().addingTimeInterval(-Double(r.counterSeconds))
+        currentTakePath = g.url?.path ?? ""
+        recording = true; setRecStart(camStartDate ?? Date())
+        status = "Recording shot \(s.n) on the camera."
+        log.append("REC shot \(s.n) at \(iso(camStartDate ?? Date()))")
+        WatchScreen.shared.showLive(shot: s.n)
+    }
+
+    /// click = press STOP through Remote (false: the camera stopped already, by hand or by itself)
+    func stopRemote(_ s: Shot, click: Bool) async {
+        if dryNow { setDry(false); recording = false; dryRun = false; status = "Dry run finished: no file, no take."; return }
+        guard !remoteBusy else { return }
+        remoteBusy = true; defer { remoteBusy = false }
+        let r = SonyRemote.shared
+        let secs = Double(r.counterSeconds)
+        if click, r.state == "REC" { _ = await r.click("stop") }
+        try? await Task.sleep(nanoseconds: 500_000_000)       // the guide runs half a second past the camera
+        let (p, d) = guide?.stop() ?? (nil, 0)
+        guide = nil
+        recording = false
+        var t = Take(shot: s.n, path: p ?? "", duration: d > 0 ? d : secs, kept: false, note: p == nil ? "no guide track" : "")
+        t.camera = true; t.camStart = iso(camStartDate ?? Date()); t.camSecs = secs
+        takes.append(t); pending = t; saveTakes()
+        log.append("take \(s.n) on the camera: \(Int(secs)) s, guide \((p.map { ($0 as NSString).lastPathComponent }) ?? "none")")
+        if r.state == "REC" {
+            status = "PROBLEM: the camera still shows REC. Press STOP once more."
+            await speak("The camera is still recording.")
+            return
+        }
+        status = "Take saved on the camera, \(Int(secs.rounded())) seconds."
+        if open { await speak("Take saved, \(Int(secs.rounded())) seconds. Keep it, or again?") }
+        if let gp = p { Task { await self.checkWords(gp) } }
+    }
+
+    /// the poll loop: STOP or REC pressed on the camera or in Remote is followed here
+    func cameraStateChanged(_ st: String) async {
+        guard Capture.remote, !remoteBusy, !SonyRemote.shared.busy, !dryNow else { return }
+        if recording, st == "STBY", let s = current {
+            log.append("the camera stopped (by hand or by itself): the take is closed")
+            await stopRemote(s, click: false)
+        } else if !recording, st == "REC", WatchScreen.shared.visible, WatchScreen.shared.live, let s = current {
+            remoteBusy = true; defer { remoteBusy = false }
+            let g = GuideTrack()
+            if let e = g.start(title: takeTitle(s)) { log.append("guide track: " + e) }
+            guide = g
+            camStartDate = Date().addingTimeInterval(-Double(SonyRemote.shared.counterSeconds))
+            currentTakePath = g.url?.path ?? ""
+            recording = true; setRecStart(camStartDate ?? Date())
+            status = "REC was pressed on the camera: recording shot \(s.n)."
+            log.append("REC by hand, shot \(s.n)")
+        }
+    }
+
+    // MARK: the exercise heard in the guide track (Voice to Text, then the words against every shot's title and text)
+    func checkWords(_ path: String) async {
+        guard let w = await transcribeWords(URL(fileURLWithPath: path)), !w.isEmpty else { log.append("guide words: not transcribed"); return }
+        let h = recognize(w)
+        guard let i = takes.firstIndex(where: { $0.path == path }) else { return }
+        takes[i].said = w; takes[i].heard = h; saveTakes()
+        log.append("heard: \(w.prefix(140))")
+        let n = takes[i].shot
+        if h != 0, h != n, let other = shots.first(where: { $0.n == h }) {
+            log.append("this sounds like shot \(h) (\(other.title)), not shot \(n)")
+            status += " It sounds like shot \(h), \(other.title)."
+        }
+    }
+
+    static func words(_ t: String) -> Set<String> {
+        let stop: Set<String> = ["the", "and", "you", "your", "with", "that", "this", "from", "into", "then", "only", "for", "are", "not", "but", "like", "very", "keep", "just"]
+        return Set(t.lowercased().components(separatedBy: CharacterSet.letters.inverted).filter { $0.count >= 3 && !stop.contains($0) })
+    }
+
+    /// the shot whose title and text share the most words with what was said; 0 when nothing stands out
+    func recognize(_ said: String) -> Int {
+        let w = Self.words(said)
+        guard w.count >= 3 else { return 0 }
+        let scored = shots.map { sh -> (Int, Double) in
+            let k = Self.words(sh.title + " " + sayText(sh))
+            return (sh.n, k.isEmpty ? 0 : Double(k.intersection(w).count) / Double(k.count).squareRoot())
+        }.sorted { $0.1 > $1.1 }
+        guard let best = scored.first, best.1 >= 0.6 else { return 0 }
+        if scored.count > 1, scored[1].1 > best.1 * 0.85 { return 0 }
+        return best.0
+    }
+}
+
 struct ShootView: View {
     @ObservedObject var sh = Shoot.shared
     @EnvironmentObject var s: Store
@@ -539,7 +726,7 @@ struct ShootView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(sh.current.map { "SHOT \($0.n) OF \(sh.shots.count)" } ?? "SHOOT").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Text(sh.current.map { "SHOT \(sh.index + 1) OF \(sh.shots.count)" + ($0.n != sh.index + 1 ? " · NO. \($0.n)" : "") } ?? "SHOOT").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 if let c = sh.current { Text(sh.state(c.n).uppercased()).font(.system(size: 11)).foregroundStyle(.orange) }
                 Spacer()
                 Button { sh.open = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).frame(width: 28, height: 28)

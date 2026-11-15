@@ -598,7 +598,7 @@ final class Store: ObservableObject {
          "fullTranscriptFile": fullPath, "hasAnalysis": hasAnalysis, "sections": analysis.sections.count,
          "remarks": analysis.remarks.count, "error": error, "lang": lang,
          "transcriptFile": videoURL == nil ? "" : transcriptPath, "analysisFile": videoURL == nil ? "" : analysisPath,
-         "exportFolder": exportFolder, "protocol": 1, "name": "MPA Lessons Analyzer (Mantra)", "discarded": Shoot.shared.takes.filter { $0.shot == (Shoot.shared.current?.n ?? 0) && $0.note.contains("(discarded)") }.count, "message": Shoot.shared.status, "controller": Controller.shared.ownerName ?? "", "shot": Shoot.shared.current?.n ?? 0, "takes": Shoot.shared.takes.filter { $0.shot == (Shoot.shared.current?.n ?? 0) }.count, "mode": WatchScreen.shared.mode, "camera": CameraEngine.shared.wantedPresent() ? "ok" : "missing", "muted": muted, "clipVolume": Double(player.volume), "ducked": ducked, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
+         "exportFolder": exportFolder, "protocol": 1, "name": "MPA Lessons Analyzer (Mantra)", "discarded": Shoot.shared.takes.filter { $0.shot == (Shoot.shared.current?.n ?? 0) && $0.note.contains("(discarded)") }.count, "message": Shoot.shared.status, "controller": Controller.shared.ownerName ?? "", "shot": Shoot.shared.current?.n ?? 0, "takes": Shoot.shared.takes.filter { $0.shot == (Shoot.shared.current?.n ?? 0) }.count, "mode": WatchScreen.shared.mode, "camera": Shoot.shared.cameraPresent ? "ok" : "missing", "capture": Capture.remote ? "remote" : "webcam", "cameraState": SonyRemote.shared.state, "cameraCounter": SonyRemote.shared.counter, "muted": muted, "clipVolume": Double(player.volume), "ducked": ducked, "recording": Shoot.shared.recording, "currentShot": Shoot.shared.current?.n ?? 0, "recElapsed": Shoot.shared.recording ? Int(Date().timeIntervalSince(Shoot.shared.recSince)) : 0, "cameraInfo": Shoot.shared.cameraInfo]
     }
 
     func route(_ method: String, _ path: String, _ body: Data, lan: Bool = false) -> (Int, Data) {
@@ -609,7 +609,7 @@ final class Store: ObservableObject {
             let k = sh.takes.filter { $0.shot == n }.count
             return (200, jsonData(["protocol": 1, "name": "MPA Lessons Analyzer (Mantra)", "mode": WatchScreen.shared.mode, "shot": n, "shots": shots.count,
                                    "takes": k, "take": k + 1, "elapsed": sh.recording ? Int(Date().timeIntervalSince(sh.recSince)) : 0,
-                                   "muted": muted, "camera": CameraEngine.shared.wantedPresent() ? "ok" : "missing", "controller": Controller.shared.ownerName ?? "", "discarded": sh.takes.filter { $0.shot == n && $0.note.contains("(discarded)") }.count, "message": sh.status, "recording": sh.recording, "cameraInfo": sh.cameraInfo, "status": sh.status]))
+                                   "muted": muted, "camera": Shoot.shared.cameraPresent ? "ok" : "missing", "capture": Capture.remote ? "remote" : "webcam", "cameraState": SonyRemote.shared.state, "cameraCounter": SonyRemote.shared.counter, "controller": Controller.shared.ownerName ?? "", "discarded": sh.takes.filter { $0.shot == n && $0.note.contains("(discarded)") }.count, "message": sh.status, "recording": sh.recording, "cameraInfo": sh.cameraInfo, "status": sh.status]))
         case ("GET", "/shots") where lan:
             let c = shots.map { ["n": $0.n, "title": $0.title, "code": $0.code, "say": $0.say, "secs": $0.secs] as [String: Any] }
             return (200, (try? JSONSerialization.data(withJSONObject: c)) ?? Data("[]".utf8))
@@ -678,7 +678,17 @@ final class Store: ObservableObject {
             muted = (o["on"] as? Bool) ?? !muted
             return (200, jsonData(["ok": true, "muted": muted]))
         case ("GET", "/camera"):
-            return (200, jsonData(CameraEngine.shared.list()))
+            var o = CameraEngine.shared.list()
+            o["capture"] = Capture.remote ? "remote" : "webcam"; o["remote"] = SonyRemote.shared.info()
+            return (200, jsonData(o))
+        case ("POST", "/capture"):
+            // {"mode": "remote"|"webcam"} (v23)
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if Shoot.shared.recording { return (409, jsonData(["error": "recording: stop first"])) }
+            if let m = o["mode"] as? String { Capture.set(remote: m != "webcam") }
+            return (200, jsonData(["capture": Capture.remote ? "remote" : "webcam"]))
+        case ("POST", "/camera/poll"):
+            return (200, jsonData(SonyRemote.shared.info()))
         case ("POST", "/camera"):
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
             if let n = o["name"] as? String { CameraEngine.shared.wantedCamera = n }
@@ -692,7 +702,7 @@ final class Store: ObservableObject {
         case ("POST", "/record"), ("POST", "/record/start"):
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
             if let n = o["shot"].map({ Int(num($0)) }) { Shoot.shared.focus(shot: n) }
-            if !CameraEngine.shared.wantedPresent() { return (409, jsonData(["error": "SONY NOT CONNECTED: switch it on, USB Streaming", "camera": "missing"])) }
+            if !Shoot.shared.cameraPresent { return (409, jsonData(["error": Capture.remote ? "CAMERA NOT CONNECTED: Imaging Edge Remote shows no live view" : "SONY NOT CONNECTED: switch it on, USB Streaming", "camera": "missing"])) }
             stopPlayback()
             Shoot.shared.dryRun = (o["dryRun"] as? Bool) ?? false
             if !Shoot.shared.recording { Shoot.shared.toggleRecord() }

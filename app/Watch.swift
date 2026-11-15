@@ -94,12 +94,22 @@ final class WatchScreen: ObservableObject {
         if pairOnly { pairOnly = false; hide() }
     }
 
+    /// v23: while sonycam clicks in Imaging Edge Remote this window lets every click through (it may lie over Remote's window)
+    func passClicks(_ on: Bool) { window?.ignoresMouseEvents = on }
+    /// after a click in Remote: this window and app are in front again (keys, Esc)
+    func refront() {
+        guard visible, let w = window else { return }
+        w.orderFrontRegardless(); w.makeKey()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func hide() {
         guard visible else { return }
         window?.orderOut(nil)
         pairCode = nil; pairOnly = false
         visible = false; live = false
         CameraEngine.shared.stop()
+        SonyRemote.shared.stopView(); SonyRemote.shared.stopPolling()
         if let k = keyMon { NSEvent.removeMonitor(k); keyMon = nil }
         if let m = moveMon { NSEvent.removeMonitor(m); moveMon = nil }
     }
@@ -150,6 +160,7 @@ struct WatchView: View {
     @ObservedObject private var w = WatchScreen.shared
     @ObservedObject private var sh = Shoot.shared
     @ObservedObject private var st = Store.shared
+    @ObservedObject private var remote = SonyRemote.shared
     @State private var hover = false
 
     private var playing: Bool { st.watchingShot != nil || st.playingAll || st.playingClip != nil }
@@ -163,21 +174,35 @@ struct WatchView: View {
             let showControls = (!playing && !w.live && !sh.recording) || ctx.date.timeIntervalSince(w.lastMove) < 3
             ZStack {
                 Color.black
-                if (w.live || sh.recording) && !sh.cameraMissing { LiveView() } else { FullPlayer(player: st.player) }
+                if (w.live || sh.recording) && !sh.cameraMissing { if Capture.remote { RemoteLiveView() } else { LiveView() } } else { FullPlayer(player: st.player) }
                 if sh.cameraMissing {
                     VStack(spacing: 16) {
-                        Text("SONY NOT CONNECTED").font(.system(size: 64, weight: .bold)).foregroundStyle(.red)
-                        Text("Switch it on, USB Streaming. This screen continues by itself.").font(.system(size: 28)).foregroundStyle(.white.opacity(0.8))
+                        Text(Capture.remote ? "CAMERA NOT CONNECTED" : "SONY NOT CONNECTED").font(.system(size: 64, weight: .bold)).foregroundStyle(.red)
+                        Text(Capture.remote ? "Imaging Edge Remote shows no live view. This screen continues by itself." : "Switch it on, USB Streaming. This screen continues by itself.").font(.system(size: 28)).foregroundStyle(.white.opacity(0.8))
                     }
                 }
-                if w.live && !sh.recording && !sh.cameraInfo.isEmpty && !sh.cameraMissing {
+                if Capture.remote && (w.live || sh.recording) && !sh.cameraMissing {
+                    VStack(spacing: 10) {
+                        Text(title).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                        if let c = sh.shots.first(where: { $0.n == w.shotN }) {
+                            Text(sh.sayText(c)).font(.system(size: 22)).foregroundStyle(.white.opacity(0.75)).multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 1100)
+                        }
+                        if !remote.picture && !remote.pictureError.isEmpty {
+                            Text(remote.pictureError).font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange).multilineTextAlignment(.center).frame(maxWidth: 1100)
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 90).padding(.horizontal, 48)
+                }
+                if !Capture.remote && w.live && !sh.recording && !sh.cameraInfo.isEmpty && !sh.cameraMissing {
                     VStack { Text(sh.cameraInfo).font(.system(size: 18)).foregroundStyle(.white.opacity(0.6)).padding(.top, 36); Spacer() }
                 }
                 if sh.recording {
                     VStack {
                         HStack(spacing: 10) {
                             Circle().fill(Color.red).frame(width: 16, height: 16)
-                            Text(fmtTime(ctx.date.timeIntervalSince(sh.recSince))).font(.system(size: 28, weight: .medium, design: .monospaced)).foregroundStyle(.white)
+                            Text(Capture.remote ? "CAMERA REC  \(remote.counter)" : fmtTime(ctx.date.timeIntervalSince(sh.recSince))).font(.system(size: 28, weight: .medium, design: .monospaced)).foregroundStyle(.white)
                             Spacer()
                         }
                         .padding(.leading, 40).padding(.top, 36)
