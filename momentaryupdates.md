@@ -59,3 +59,7 @@ Marko (after trying v25): "It was very confusing. It was some kind of interface 
 **Status:** saved first (read as: v26 removes the captured picture and the click-through overlay; RECORD/start brings the real Imaging Edge Remote to the front on the MacBook screen, maximized by Rectangle; after the take Remote goes to the other screen (Rectangle next-display) and Second Take comes back to the front; sonycam, guide track, matching, plan order and Queen phrases stay.)
 Marko (added): "Yes, that's a great idea, but never make it totally full screen, so I'm blocked."
 **Status:** done 15.11.2026 in v26 (sonycam front/away with Rectangle almost-maximize / next-display; the window copy removed; WATCH is a normal almost-maximized window). The flip through the app waits for Marko's "resume".
+
+## 15.11.2026: the SHOOT panel is cut and cannot be resized
+Marko: "Please take a look at this screen in the middle of the screen. It's cut out. I don't see the whole text and I cannot resize it. Again, the bug, don't want to see again, please."
+**Status:** saved first (read as: SHOOT becomes a standard macOS window: titled, resizable from every edge, frame autosave, default about 720x520 on the MacBook screen, small minimum; text wraps to the window width, buttons wrap to a second row, the log scrolls; a 0 s take never counts.)
