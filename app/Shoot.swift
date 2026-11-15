@@ -18,6 +18,8 @@ struct Take: Identifiable {
     var cameraOffset: Double = 0   // seconds: guide time = camera time + offset (match tool)
     var said: String = ""          // the guide track's words (Voice to Text)
     var heard: Int = 0             // the shot the words sound like (0 = not checked)
+    /// v27: the camera's counter never moved (camSecs 0): no clip on the card, so it never counts and is never kept
+    var noClip: Bool { camera && camSecs < 1 }
 }
 
 /// Records the microphone until Marko stops talking (1.5 s of silence after speech, 30 s at most) into a temp WAV.
@@ -70,7 +72,8 @@ final class MicCapture {
 @MainActor
 final class Shoot: ObservableObject {
     static let shared = Shoot()
-    @Published var open = false
+    @Published var open = false { didSet { if open != oldValue { ShootWindow.shared.sync(open); if !open && !recording { RecOverlay.shared.hide() } } } }
+    var quiet = false                 // v27: begin without Beatrice (the size check)
     @Published var index = 0
     @Published var takes: [Take] = []
     @Published var skipped: Set<Int> = []
@@ -111,7 +114,7 @@ final class Shoot: ObservableObject {
 
     // MARK: state
     /// in camera mode only the camera takes count (the webcam takes of 13-14.11.2026 stay listed, but the shot is still to do)
-    func counts(_ t: Take) -> Bool { !Capture.remote || t.camera }
+    func counts(_ t: Take) -> Bool { !Capture.remote || (t.camera && !t.noClip) }
     func isKept(_ n: Int) -> Bool { takes.contains { $0.shot == n && $0.kept && counts($0) } }
     func state(_ n: Int) -> String { isKept(n) ? "kept" : (skipped.contains(n) ? "skipped" : (takes.contains { $0.shot == n && counts($0) } ? "recorded" : "pending")) }
     func sayText(_ s: Shot) -> String { edits[s.n] ?? s.say }
@@ -122,7 +125,7 @@ final class Shoot: ObservableObject {
         if let n = shot, let i = shots.firstIndex(where: { $0.n == n }) { index = i }
         else if let i = shots.firstIndex(where: { state($0.n) == "pending" || state($0.n) == "recorded" }) { index = i }
         open = true
-        introduce()
+        if quiet { quiet = false } else { introduce() }
     }
 
     func introduce() {
@@ -371,8 +374,8 @@ final class Shoot: ObservableObject {
 
     func keep() {
         guard let s = current else { return }
-        if let p = pending, let i = takes.firstIndex(where: { $0.path == p.path }) { takes[i].kept = true; saveTakes() }
-        else if !takes.contains(where: { $0.shot == s.n && $0.kept }), let i = takes.lastIndex(where: { $0.shot == s.n }) { takes[i].kept = true; saveTakes() }
+        if let p = pending, !p.noClip, let i = takes.firstIndex(where: { $0.path == p.path }) { takes[i].kept = true; saveTakes() }
+        else if !takes.contains(where: { $0.shot == s.n && $0.kept && counts($0) }), let i = takes.lastIndex(where: { $0.shot == s.n && counts($0) }) { takes[i].kept = true; saveTakes() }
         pending = nil
         advance()
     }
@@ -618,7 +621,7 @@ extension Shoot {
             return
         }
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined { _ = await AVCaptureDevice.requestAccess(for: .audio) }
-        if !r.inFront { await r.bringFront() }          // v26: the real Remote in front on the MacBook screen while recording
+        await r.bringBig()                              // v27: the real Remote maximized on the BenQ while recording (Marko sees himself)
         let title = takeTitle(s)
         let g = GuideTrack()
         if let e = g.start(title: title) { log.append("guide track: " + e) }      // the camera take matters more: go on without it
@@ -627,7 +630,7 @@ extension Shoot {
         guard r.state == "REC" else {
             let (gp, _) = g.stop()
             if let gp { try? FileManager.default.removeItem(atPath: gp) }
-            await r.sendAway()
+            ShootWindow.shared.front()
             status = "The camera did not start recording. \(r.lastLine)"
             log.append("record: " + r.lastLine)
             await speak("The camera did not start.")
@@ -638,7 +641,8 @@ extension Shoot {
         currentTakePath = g.url?.path ?? ""
         recording = true; setRecStart(camStartDate ?? Date())
         status = "Recording shot \(s.n) on the camera."
-        log.append("REC shot \(s.n) at \(iso(camStartDate ?? Date()))")
+        log.append("REC shot \(s.n) at \(iso(camStartDate ?? Date())) (RECORD in Second Take, its API or the remote)")
+        RecOverlay.shared.show()
     }
 
     /// click = press STOP through Remote (false: the camera stopped already, by hand or by itself)
@@ -655,6 +659,7 @@ extension Shoot {
         recording = false
         var t = Take(shot: s.n, path: p ?? "", duration: d > 0 ? d : secs, kept: false, note: p == nil ? "no guide track" : "")
         t.camera = true; t.camStart = iso(camStartDate ?? Date()); t.camSecs = secs
+        if secs < 1 { t.note += (t.note.isEmpty ? "" : " ") + "(no camera clip: the counter never moved)" }
         takes.append(t); pending = t; saveTakes()
         log.append("take \(s.n) on the camera: \(Int(secs)) s, guide \((p.map { ($0 as NSString).lastPathComponent }) ?? "none")")
         if r.state == "REC" {
@@ -662,8 +667,14 @@ extension Shoot {
             await speak("The camera is still recording.")
             return
         }
+        // v27: Remote stays big on the BenQ (Marko looks there); Second Take's window comes to the front on the MacBook for KEEP / AGAIN
+        ShootWindow.shared.front()
+        if t.noClip {
+            status = "PROBLEM: the camera's counter never moved: no clip on the card. This take does not count."
+            if open { await speak("The camera did not record. Press record again.") }
+            return
+        }
         status = "Take saved on the camera, \(Int(secs.rounded())) seconds."
-        await r.sendAway()                              // v26: Remote to the other screen, Second Take in front for KEEP / AGAIN
         if open { await speak("Take saved, \(Int(secs.rounded())) seconds. Keep it, or again?") }
         if let gp = p { Task { await self.checkWords(gp) } }
     }
@@ -671,6 +682,14 @@ extension Shoot {
     /// the poll loop: STOP or REC pressed on the camera or in Remote is followed here
     func cameraStateChanged(_ st: String) async {
         guard Capture.remote, !remoteBusy, !SonyRemote.shared.busy, !dryNow else { return }
+        if recording, st == "NONE", !cameraMissing {
+            cameraMissing = true
+            status = "CAMERA LOST: Imaging Edge Remote shows no live view. Press STOP, then check the camera."
+            log.append("camera lost its live view while recording")
+            await speak("The camera is lost.")
+            return
+        }
+        if recording, st != "NONE" { cameraMissing = false }
         if recording, st == "STBY", let s = current {
             log.append("the camera stopped (by hand or by itself): the take is closed")
             await stopRemote(s, click: false)
@@ -683,7 +702,8 @@ extension Shoot {
             currentTakePath = g.url?.path ?? ""
             recording = true; setRecStart(camStartDate ?? Date())
             status = "REC was pressed on the camera: recording shot \(s.n)."
-            log.append("REC by hand, shot \(s.n)")
+            log.append("REC by hand (camera or Remote), shot \(s.n)")
+            RecOverlay.shared.show()
         }
     }
 
@@ -726,24 +746,27 @@ struct ShootView: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        GeometryReader { geo in
+        // the text grows with the window (full screen = large), always wrapping inside the margins
+        let k = max(1, min(2.6, geo.size.width / 720))
+        ScrollView(.vertical) {
+        VStack(alignment: .leading, spacing: 12 * k) {
             HStack {
                 Text(sh.current.map { "SHOT \(sh.index + 1) OF \(sh.shots.count)" + ($0.n != sh.index + 1 ? " · NO. \($0.n)" : "") } ?? "SHOOT").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 if let c = sh.current { Text(sh.state(c.n).uppercased()).font(.system(size: 11)).foregroundStyle(.orange) }
                 Spacer()
-                Button { sh.open = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).frame(width: 28, height: 28)
+                Button(action: { ShootWindow.shared.toggleFullScreen() }) { Text("FULL SCREEN").font(.system(size: 12, weight: .semibold)) }.buttonStyle(.plain).foregroundStyle(.orange)
             }
             if let c = sh.current {
-                Text(c.title).font(.system(size: 28, weight: .bold)).fixedSize(horizontal: false, vertical: true)
+                Text(c.title).font(.system(size: 28 * k, weight: .bold)).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 14) {
                     if c.secs > 0 { Text("\(Int(c.secs)) sec").font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary) }
                     if !c.code.isEmpty { Text(c.code).font(.system(size: 12, design: .monospaced)).foregroundStyle(.teal) }
                 }
-                ScrollView { Text(sh.sayText(c)).font(.system(size: 18)).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true) }
-                    .frame(maxHeight: 200)
+                Text(sh.sayText(c)).font(.system(size: 18 * k)).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
             }
             Divider()
-            HStack(spacing: 22) {
+            FlowLayout(spacing: 22, lineSpacing: 10) {
                 StepButton(n: "1", word: "WATCH", enabled: true) { sh.watch() }
                 StepButton(n: "2", word: sh.recording ? "STOP" : "RECORD", enabled: true) { sh.toggleRecord() }
                 StepButton(n: "3", word: "AGAIN", enabled: true) { sh.again() }
@@ -751,23 +774,24 @@ struct ShootView: View {
                 StepButton(n: "5", word: sh.talking ? "LISTENING" : "TALK", enabled: true) { sh.talk() }
                 StepButton(n: "6", word: "KEEP", enabled: sh.pending != nil || sh.current.map { c in sh.takes.contains { $0.shot == c.n } } ?? false) { sh.keep() }
             }
-            Text(sh.status).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(sh.status).font(.system(size: 13 * k)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if !sh.log.isEmpty {
                 Divider()
-                ScrollView { VStack(alignment: .leading, spacing: 2) { ForEach(Array(sh.log.suffix(8).enumerated()), id: \.offset) { _, l in Text(l).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading) } } }
-                    .frame(maxHeight: 110)
+                VStack(alignment: .leading, spacing: 2) { ForEach(Array(sh.log.suffix(12).enumerated()), id: \.offset) { _, l in Text(l).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading) } }
             }
             if sh.finished {
                 Divider()
-                HStack(spacing: 22) {
+                FlowLayout(spacing: 22, lineSpacing: 10) {
                     StepButton(n: "7", word: "HAND TO QUEEN", enabled: true) { sh.handToQueen() }
                     Text((sh.finishPath as NSString).lastPathComponent).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 }
             }
-            Spacer(minLength: 0)
         }
-        .padding(20)
-        .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 460, idealHeight: 560, maxHeight: .infinity)
+        .padding(20 * k)
+        .frame(width: geo.size.width, alignment: .leading)
+        }
+        }
+        .frame(minWidth: 420, maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
         .focusable().focused($focused).focusEffectDisabled()
         .onAppear { focused = true }
         .onKeyPress(characters: CharacterSet(charactersIn: "1234567")) { p in

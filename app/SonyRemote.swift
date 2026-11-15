@@ -128,6 +128,17 @@ final class SonyRemote: NSObject, ObservableObject {
         lastLine = out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// v27: Remote maximized on the BenQ (Rectangle, not macOS full screen) for recording; it stays there after the take
+    func bringBig() async {
+        WatchScreen.shared.hide(keepPolling: true)
+        busy = true
+        let (code, out) = await Self.run("big")
+        busy = false
+        inFront = code == 0
+        lastLine = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        RecOverlay.shared.show()
+    }
+
     /// Remote to the other screen, Second Take back in front (its main window, never full screen)
     func sendAway() async {
         guard inFront else { return }

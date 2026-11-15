@@ -687,6 +687,19 @@ final class Store: ObservableObject {
             if Shoot.shared.recording { return (409, jsonData(["error": "recording: stop first"])) }
             if let m = o["mode"] as? String { Capture.set(remote: m != "webcam") }
             return (200, jsonData(["capture": Capture.remote ? "remote" : "webcam"]))
+        case ("POST", "/shoot/size"):
+            // v27 size check: {"w","h"} content size of the SHOOT window, then screenshot it
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            ShootWindow.shared.setSize(num(o["w"]), num(o["h"]))
+            return (200, jsonData(ShootWindow.shared.info))
+        case ("GET", "/shoot/window"):
+            return (200, jsonData(["shoot": ShootWindow.shared.info, "overlay": RecOverlay.shared.info]))
+        case ("POST", "/overlay/test"):
+            // {"on": true|false}: the recording overlay without any recording (nothing is sent to the camera)
+            let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            if (o["on"] as? Bool) ?? true { RecOverlay.shared.simulated = Date(); RecOverlay.shared.show() }
+            else { RecOverlay.shared.simulated = nil; if !Shoot.shared.recording { RecOverlay.shared.hide() } }
+            return (200, jsonData(RecOverlay.shared.info))
         case ("POST", "/camera/poll"):
             return (200, jsonData(SonyRemote.shared.info()))
         case ("POST", "/camera"):
@@ -748,6 +761,7 @@ final class Store: ObservableObject {
         case ("POST", "/shoot/start"):
             guard videoURL != nil, !shots.isEmpty else { return (409, jsonData(["error": "open the video; the analysis needs shots"])) }
             let o = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            Shoot.shared.quiet = (o["quiet"] as? Bool) ?? false
             Shoot.shared.begin(shot: o["shot"].map { Int(num($0)) })
             return (200, jsonData(["shoot": true, "current": Shoot.shared.current?.n ?? 0]))
         case ("POST", "/shoot/action"):

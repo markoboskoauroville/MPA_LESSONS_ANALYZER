@@ -80,7 +80,6 @@ struct ContentView: View {
             TableView()
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
-        .sheet(isPresented: $shoot.open) { ShootView().environmentObject(s) }
     }
 
     var topRow: some View {
