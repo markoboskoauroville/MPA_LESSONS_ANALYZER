@@ -68,8 +68,7 @@ final class WatchScreen: ObservableObject {
 
     func show(shot n: Int) {
         shotN = n
-        live = false
-        Shoot.shared.focus(shot: n)
+        live = false          // v28: watching never changes the current shot of the session
         present()
     }
 

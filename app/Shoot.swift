@@ -402,9 +402,13 @@ final class Shoot: ObservableObject {
     }
 
     func perform(_ action: String, text: String? = nil, shot: Int? = nil) {
-        if let n = shot, let i = shots.firstIndex(where: { $0.n == n }), i != index, action != "edit_shot" { index = i }
+        // v28: WATCH of another shot and STOP never move the current shot (only KEEP/next, SKIP, RECORD, AGAIN with a shot do)
+        let stays = ["edit_shot", "add_say", "watch", "stop"].contains(action.lowercased())
+        if let n = shot, let i = shots.firstIndex(where: { $0.n == n }), i != index, !stays { index = i; log.append("current shot set to \(n) by \(action)") }
         switch action.lowercased() {
-        case "watch": watch()
+        case "watch":
+            if let n = shot, n != current?.n { store.watchShot(n); status = "Watching shot \(n); the current shot stays \(current?.n ?? 0)." }
+            else { watch() }
         case "record": if !recording { toggleRecord() }
         case "stop": if recording { toggleRecord() }
         case "again": again()

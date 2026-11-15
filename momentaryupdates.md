@@ -66,3 +66,7 @@ Marko: "Please take a look at this screen in the middle of the screen. It's cut 
 Marko (added): "Second thing I'm expecting is that you bring imaging edge Sony application to the [BenQ] in a full screen view when I'm recording so I can see myself. And you can also put some text that it is cut on both sides and cut that it is recorded right now and some kind of timer so I know it's recording. Please."
 **Status:** saved first (read as: at RECORD Remote goes to the BenQ, maximized by Rectangle (not macOS full screen) and stays there after the take; a click-through overlay on the BenQ shows "● RECORDING", a timer, the shot, and a thin red frame on the left and right edges; nothing while not recording but a small grey STANDBY line.)
 **Status:** done 15.11.2026 in v27 (standard SHOOT window with full screen and wrapping text; sonycam big; RECORDING overlay simulated and checked on the BenQ). A real take waits for Marko.
+
+## 15.11.2026: after STOP it went to another shot
+Marko: "Application has a bug. We stopped. It goes to the next clip. Please bring it back."
+**Status:** v28: the jump to shot 3 came from a "watch shot 3" (POST /shoot/action watch, shot 3) sent by a Queen test at the same time: WATCH with a shot number moved the current shot. Now WATCH of any shot and STOP never move the current shot; only KEEP/next, SKIP, RECORD and AGAIN do; every such move is written in the log. The stopped take of shot 1 (52 s) is not kept.
