@@ -110,7 +110,8 @@ def main():
                 if j in used: continue
                 dt = abs((c["start"] - t["_start"]).total_seconds() - off)
                 dd = abs(c["dur"] - (t.get("camSecs") or t.get("duration") or 0))
-                if dt <= 3 and (dd <= 3 or not t.get("camSecs")) and (best is None or dt < best[0]): best = (dt, j)
+                est = "estimated" in t.get("note", "")
+                if dt <= 3 and (dd <= 3 or est or not t.get("camSecs")) and (best is None or dt < best[0]): best = (dt, j)
             if best: used.add(best[1]); out[i] = best[1]
         return out
     best_off, best_pairs = 0, {}

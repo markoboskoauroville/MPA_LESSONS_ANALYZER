@@ -101,7 +101,12 @@ final class SonyRemote: NSObject, ObservableObject {
         if line.contains("not connected") || line.hasPrefix("ERROR") { state = "NONE"; return }
         if line.contains(" REC") { state = "REC" } else if line.contains("STBY") { state = "STBY" }
         if let r = line.range(of: "[0-9]{2}:[0-9]{2}:[0-9]{2}", options: .regularExpression) { counter = String(line[r]) }
+        // v29: the longest counter and whether REC was seen during the take (after a stop the counter reads 00:00:00 again)
+        if state == "REC" { sawRec = true; maxCounter = max(maxCounter, counterSeconds) }
     }
+    var maxCounter = 0
+    var sawRec = false
+    func resetTake() { maxCounter = 0; sawRec = false }
 
     func poll() async {
         guard !busy else { return }

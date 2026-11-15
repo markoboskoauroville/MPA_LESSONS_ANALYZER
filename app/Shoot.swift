@@ -259,6 +259,7 @@ final class Shoot: ObservableObject {
     var camStartDate: Date?
     var remoteBusy = false            // a camera start/stop is in progress: the poll loop does not adopt or close takes
     var lastConnectTry = Date.distantPast
+    var keepAsked = Date.distantPast
     var dryNow: Bool { dryActive }
     func setDry(_ on: Bool) { dryActive = on }
     func setRecStart(_ d: Date) { recStart = d }
@@ -374,8 +375,20 @@ final class Shoot: ObservableObject {
 
     func keep() {
         guard let s = current else { return }
-        if let p = pending, !p.noClip, let i = takes.firstIndex(where: { $0.path == p.path }) { takes[i].kept = true; saveTakes() }
-        else if !takes.contains(where: { $0.shot == s.n && $0.kept && counts($0) }), let i = takes.lastIndex(where: { $0.shot == s.n && counts($0) }) { takes[i].kept = true; saveTakes() }
+        // v29: KEEP keeps the take just recorded, never an older one; a take flagged without a camera clip asks first (KEEP again within 15 s keeps it)
+        if let p = pending, let i = takes.firstIndex(where: { $0.path == p.path }) {
+            if p.noClip && Date().timeIntervalSince(keepAsked) > 15 {
+                keepAsked = Date()
+                status = "The last take shows no camera clip (the counter never moved). Press KEEP again to keep it anyway, or AGAIN to record it again."
+                Task { await speak("The camera shows no clip for this take. Keep it anyway, or again?") }
+                return
+            }
+            for j in takes.indices where takes[j].shot == s.n && takes[j].kept { takes[j].kept = false }
+            takes[i].kept = true
+            if takes[i].noClip { takes[i].note += " (kept by Marko although the counter read 0)" }
+            saveTakes(); log.append("kept: \((p.path as NSString).lastPathComponent)")
+        } else if !takes.contains(where: { $0.shot == s.n && $0.kept && counts($0) }), let i = takes.lastIndex(where: { $0.shot == s.n && counts($0) }) { takes[i].kept = true; saveTakes() }
+        keepAsked = .distantPast
         pending = nil
         advance()
     }
@@ -641,6 +654,7 @@ extension Shoot {
             return
         }
         guide = g
+        r.resetTake(); r.parse(r.lastLine)
         camStartDate = Date().addingTimeInterval(-Double(r.counterSeconds))
         currentTakePath = g.url?.path ?? ""
         recording = true; setRecStart(camStartDate ?? Date())
@@ -655,7 +669,11 @@ extension Shoot {
         guard !remoteBusy else { return }
         remoteBusy = true; defer { remoteBusy = false }
         let r = SonyRemote.shared
-        let secs = Double(r.counterSeconds)
+        // v29: the longest counter seen during the take; if REC was seen but no counter was read, the guide length (less the 4 s before the click)
+        var secs = Double(max(r.maxCounter, r.counterSeconds))
+        let guideSecs = guide.map { g in g.started.map { Date().timeIntervalSince($0) } ?? 0 } ?? 0
+        var estimated = false
+        if secs < 1 && r.sawRec && guideSecs > 5 { secs = (guideSecs - 4).rounded(); estimated = true }
         if click, r.state == "REC" { _ = await r.click("stop") }
         try? await Task.sleep(nanoseconds: 500_000_000)       // the guide runs half a second past the camera
         let (p, d) = guide?.stop() ?? (nil, 0)
@@ -664,6 +682,8 @@ extension Shoot {
         var t = Take(shot: s.n, path: p ?? "", duration: d > 0 ? d : secs, kept: false, note: p == nil ? "no guide track" : "")
         t.camera = true; t.camStart = iso(camStartDate ?? Date()); t.camSecs = secs
         if secs < 1 { t.note += (t.note.isEmpty ? "" : " ") + "(no camera clip: the counter never moved)" }
+        if estimated { t.note += (t.note.isEmpty ? "" : " ") + "(camSecs estimated from the guide)" }
+        r.resetTake()
         takes.append(t); pending = t; saveTakes()
         log.append("take \(s.n) on the camera: \(Int(secs)) s, guide \((p.map { ($0 as NSString).lastPathComponent }) ?? "none")")
         if r.state == "REC" {
@@ -702,6 +722,7 @@ extension Shoot {
             let g = GuideTrack()
             if let e = g.start(title: takeTitle(s)) { log.append("guide track: " + e) }
             guide = g
+            SonyRemote.shared.resetTake(); SonyRemote.shared.parse(SonyRemote.shared.lastLine)
             camStartDate = Date().addingTimeInterval(-Double(SonyRemote.shared.counterSeconds))
             currentTakePath = g.url?.path ?? ""
             recording = true; setRecStart(camStartDate ?? Date())

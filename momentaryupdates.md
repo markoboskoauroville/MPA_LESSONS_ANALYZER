@@ -70,3 +70,7 @@ Marko (added): "Second thing I'm expecting is that you bring imaging edge Sony a
 ## 15.11.2026: after STOP it went to another shot
 Marko: "Application has a bug. We stopped. It goes to the next clip. Please bring it back."
 **Status:** v28: the jump to shot 3 came from a "watch shot 3" (POST /shoot/action watch, shot 3) sent by a Queen test at the same time: WATCH with a shot number moved the current shot. Now WATCH of any shot and STOP never move the current shot; only KEEP/next, SKIP, RECORD and AGAIN do; every such move is written in the log. The stopped take of shot 1 (52 s) is not kept.
+
+## 15.11.2026: a real take flagged "no camera clip", KEEP kept the older take
+(from the coordinator: shot 1 take 5, about 6 minutes, really recorded, got camSecs 0; KEEP then kept take 4)
+**Status:** v29: the counter is the longest seen during the take (after a stop it reads 00:00:00); if REC was seen but no counter was read, the guide length less 4 s is used and marked estimated; KEEP keeps only the take just recorded, a no-clip take asks first (KEEP again within 15 s keeps it); the match tool skips the length check for an estimated take. Data fixed at the v29 install: take 5 kept, take 4 not kept.
