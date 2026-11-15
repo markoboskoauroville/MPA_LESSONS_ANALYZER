@@ -61,3 +61,18 @@ Marko: "Only thing which is changing that we are not recording with web camera, 
   `<lesson>.analysis.before-plan-sync.json`. v24: the app keeps the file's shot order (no sort by number); SHOOT shows "SHOT 2 OF 15 · NO. 12".
 - **Queen** ($0, groq_ai_studio qwen_app/second_take.py, skill second-take): "start second take", "next exercise", "stop second take", "second take status".
 - Not run yet: a real camera take through the app (needs Marko watching, and Screen Recording on). tools/rehearsal_test still tests the webcam path.
+
+## v26 (15.11.2026): the real Imaging Edge Remote is flipped, never copied; nothing full screen
+Marko tried v25: "a copy of the original program which I couldn't even click. It's disaster ... Simply put in front the original program while we are
+recording and then put it on the second when we don't need it. Use Rectangle" and "never make it totally full screen, so I'm blocked".
+- The ScreenCaptureKit window copy is gone (no Screen Recording needed; PERMISSIONS = microphone only in remote mode).
+- `sonycam front` (MACRO_SKILLS): Remote fronted, Rectangle next-display until it is on the Built-in display, then almost-maximize; `sonycam away`: next-display
+  until it leaves the Built-in display. Second Take: RECORD, AGAIN, POST /live and "start second take" bring Remote to the front (Second Take's own window steps back);
+  after the take (STOP from Second Take, Queen, the phone, or the red button in Remote itself, followed by the 1 s poll) Remote goes away and Second Take comes back
+  for KEEP / AGAIN; WATCH, POST /live {"on":false} and POST /stop send Remote away too.
+- The record click: sonycam now clicks the red record button found by Accessibility (AX button "Video", centre by Macro Recorder's AXClick), ONE click only
+  (it waits up to 6 s for REC/STBY, never clicks twice); the old offset is used only when the AX button is missing. Found 15.11.2026: the old offset
+  (origin + 758,182) hit the big "Photo" (still shutter) button in the 918-wide window; the red one is "Video". Not yet run with a real recording.
+- WATCH: a normal titled window, almost-maximized on the chosen screen (visible frame less 2.5 % around), level normal; never borderless full screen.
+- Dry flip of Remote tested by sonycam front/away with screenshots of both screens (MacBook: Remote 1361x850 in front, not full screen; BenQ after away).
+  The flip through the app itself (v26) is not yet run: Marko paused screen work at 14:12.
