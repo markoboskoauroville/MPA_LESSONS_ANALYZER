@@ -109,7 +109,7 @@ func parseAnalysis(_ data: Data) -> Analysis? {
                             watch: (c["watch"] as? [Any] ?? []).map { Int(num($0)) }, secs: num(c["secs"]),
                             code: c["code"] as? String ?? "", say: c["say"] as? String ?? ""))
     }
-    a.shots.sort { $0.n < $1.n }
+    // v24: the shots stay in the file's order (tools/plan_sync orders them by the MPA Academy lesson plan; the numbers stay the take names')
     a.clips.sort { $0.n < $1.n }
     a.cuts.sort { $0.start < $1.start }
     a.sections.sort { $0.start < $1.start }
